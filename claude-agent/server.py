@@ -31,7 +31,7 @@ async def run_task(request: TaskRequest):
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     try:
-        response = await session.send(request.prompt)
+        response = await session.send_with_tools(request.prompt)
         return {"response": response}
     except RuntimeError as exc:
         raise HTTPException(status_code=504, detail=str(exc))

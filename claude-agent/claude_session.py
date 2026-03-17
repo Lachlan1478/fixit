@@ -1,102 +1,97 @@
 import asyncio
 import logging
 
+from middleware import process as middleware_process
+
 logger = logging.getLogger(__name__)
 
-# How long to wait for more output before considering the response complete.
-# Increase this if Claude's responses get cut off mid-stream.
-SILENCE_TIMEOUT = 2.0
+PER_CALL_TIMEOUT = 120    # seconds per individual claude invocation
+TOOL_LOOP_TIMEOUT = 300   # seconds for the entire tool loop
+
+SYSTEM_PROMPT = (
+    "You are a capable agent. Use your built-in tools (Read, Write, Bash, etc.) as needed to complete the task.\n\n"
+    "When you are done, you MUST respond with ONLY a JSON object — no text before or after, no markdown code fences. "
+    "Use this exact structure:\n\n"
+    "{\n"
+    '  "thought": "your internal reasoning about what you did and why",\n'
+    '  "actions": [\n'
+    '    {"type": "read_file|write_file|shell|none", "input": "the path or command", "reason": "why you did it"}\n'
+    "  ],\n"
+    '  "final_answer": "your complete response to the user"\n'
+    "}\n\n"
+    "Rules for the actions array:\n"
+    "- List every file read, file written, or shell command you ran.\n"
+    '- If you took no file/shell actions, include exactly one entry: {"type": "none", "input": "", "reason": "no tools used"}.\n'
+    "- Valid types: read_file, write_file, shell, none.\n"
+    "- Every entry must have all three fields.\n\n"
+    "Do not include any text outside the JSON object. Your entire response must be valid JSON."
+)
 
 
 class ClaudeSession:
     """
-    Manages a single persistent Claude CLI process.
-
-    Prompts are serialized through an asyncio.Lock so concurrent API
-    requests are queued rather than interleaved.  If the process dies
-    it is restarted automatically before the next send.
+    Runs Claude via `claude --print` for each request.
+    Conversation history is maintained between tool rounds using `--continue`.
+    Concurrent requests are serialized through an asyncio.Lock.
     """
 
     def __init__(self):
-        self._process: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
 
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
-
     async def start(self) -> None:
-        await self._spawn()
+        pass  # no persistent process
 
     async def stop(self) -> None:
-        await self._kill()
         logger.info("Claude session stopped")
 
     async def send(self, prompt: str) -> str:
+        """Simple one-shot send with no tool loop."""
         async with self._lock:
-            if not self._alive():
-                logger.warning("Claude is not running — restarting")
-                await self._spawn()
+            return await self._run_claude(["--system-prompt", SYSTEM_PROMPT], prompt)
 
+    async def send_with_tools(self, prompt: str) -> str:
+        async with self._lock:
             try:
                 return await asyncio.wait_for(
-                    self._do_send(prompt), timeout=120
+                    self._tool_loop(prompt), timeout=TOOL_LOOP_TIMEOUT
                 )
             except asyncio.TimeoutError:
-                logger.error("Prompt timed out — restarting Claude")
-                await self._restart()
-                raise RuntimeError("Request timed out after 120 s")
+                raise RuntimeError(f"Request timed out after {TOOL_LOOP_TIMEOUT}s")
             except Exception as exc:
-                logger.error("Send failed (%s) — restarting Claude", exc)
-                await self._restart()
+                logger.error("send_with_tools failed: %s", exc)
                 raise
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _spawn(self) -> None:
-        self._process = await asyncio.create_subprocess_exec(
-            "claude",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        logger.info("Claude started (PID %d)", self._process.pid)
+    async def _run_claude(self, extra_args: list[str], input_text: str) -> str:
+        """Spawn `claude --print [extra_args]`, send input via stdin, return stdout."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "--print", "--dangerously-skip-permissions", *extra_args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to launch claude: {e}")
 
-    def _alive(self) -> bool:
-        return self._process is not None and self._process.returncode is None
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=input_text.encode()),
+                timeout=PER_CALL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(f"Claude timed out after {PER_CALL_TIMEOUT}s")
 
-    async def _do_send(self, prompt: str) -> str:
-        self._process.stdin.write((prompt + "\n").encode())
-        await self._process.stdin.drain()
-        return await self._collect_response()
+        if stderr:
+            logger.warning("Claude stderr: %s", stderr.decode(errors="replace").strip())
 
-    async def _collect_response(self) -> str:
-        """
-        Read stdout until SILENCE_TIMEOUT seconds pass with no new data.
-        That silence signals Claude has finished its response.
-        """
-        chunks: list[str] = []
-        while True:
-            try:
-                chunk = await asyncio.wait_for(
-                    self._process.stdout.read(4096),
-                    timeout=SILENCE_TIMEOUT,
-                )
-                if not chunk:
-                    raise RuntimeError("Claude stdout closed unexpectedly")
-                chunks.append(chunk.decode(errors="replace"))
-            except asyncio.TimeoutError:
-                break  # silence — response is complete
+        return stdout.decode(errors="replace").strip()
 
-        return "".join(chunks).strip()
-
-    async def _restart(self) -> None:
-        await self._kill()
-        await self._spawn()
-
-    async def _kill(self) -> None:
-        if self._process and self._process.returncode is None:
-            self._process.kill()
-            await self._process.wait()
+    async def _tool_loop(self, prompt: str) -> str:
+        response = await self._run_claude(["--system-prompt", SYSTEM_PROMPT], prompt)
+        return middleware_process(prompt, response)
