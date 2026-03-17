@@ -1,30 +1,41 @@
 import asyncio
 import logging
 
-from middleware import process as middleware_process
+import middleware
+from executor import execute_actions, format_results_for_claude
 
 logger = logging.getLogger(__name__)
 
 PER_CALL_TIMEOUT = 120    # seconds per individual claude invocation
 TOOL_LOOP_TIMEOUT = 300   # seconds for the entire tool loop
+MAX_TOOL_ROUNDS = 10
 
 SYSTEM_PROMPT = (
-    "You are a capable agent. Use your built-in tools (Read, Write, Bash, etc.) as needed to complete the task.\n\n"
-    "When you are done, you MUST respond with ONLY a JSON object — no text before or after, no markdown code fences. "
-    "Use this exact structure:\n\n"
+    "You are a planning agent. You have NO tools and CANNOT execute anything yourself.\n"
+    "To complete a task, propose actions and the server will execute them and return results.\n\n"
+    "Always respond with ONLY a valid JSON object — no text before or after, no markdown fences:\n\n"
     "{\n"
-    '  "thought": "your internal reasoning about what you did and why",\n'
+    '  "thought": "your step-by-step reasoning",\n'
     '  "actions": [\n'
-    '    {"type": "read_file|write_file|shell|none", "input": "the path or command", "reason": "why you did it"}\n'
+    '    {\n'
+    '      "type": "read_file | write_file | shell | none",\n'
+    '      "input": "file path or shell command",\n'
+    '      "content": "file content — write_file ONLY, omit for all other types",\n'
+    '      "reason": "why this action is needed"\n'
+    '    }\n'
     "  ],\n"
-    '  "final_answer": "your complete response to the user"\n'
+    '  "final_answer": "set ONLY when all actions have type none — your complete answer to the user"\n'
     "}\n\n"
-    "Rules for the actions array:\n"
-    "- List every file read, file written, or shell command you ran.\n"
-    '- If you took no file/shell actions, include exactly one entry: {"type": "none", "input": "", "reason": "no tools used"}.\n'
+    "Workflow:\n"
+    "1. To gather information or take action: list the actions you need. Leave final_answer empty or omit it.\n"
+    "2. The server executes your actions and returns results in the next message.\n"
+    "3. When you have everything you need: set actions to "
+    '[{"type":"none","input":"","reason":"task complete"}] and write your full final_answer.\n\n'
+    "Rules:\n"
     "- Valid types: read_file, write_file, shell, none.\n"
-    "- Every entry must have all three fields.\n\n"
-    "Do not include any text outside the JSON object. Your entire response must be valid JSON."
+    "- write_file requires a \"content\" field with the complete file content.\n"
+    "- You may propose multiple actions per round.\n"
+    "- Do not include any text outside the JSON object. Your entire response must be valid JSON."
 )
 
 
@@ -69,7 +80,7 @@ class ClaudeSession:
         """Spawn `claude --print [extra_args]`, send input via stdin, return stdout."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "claude", "--print", "--dangerously-skip-permissions", *extra_args,
+                "claude", "--print", *extra_args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -93,5 +104,30 @@ class ClaudeSession:
         return stdout.decode(errors="replace").strip()
 
     async def _tool_loop(self, prompt: str) -> str:
-        response = await self._run_claude(["--system-prompt", SYSTEM_PROMPT], prompt)
-        return middleware_process(prompt, response)
+        response = await self._run_claude(
+            ["--system-prompt", SYSTEM_PROMPT, "--allowedTools", ""], prompt
+        )
+
+        for round_num in range(MAX_TOOL_ROUNDS):
+            parsed = middleware.parse(response)
+
+            if parsed is None:
+                middleware.log_round(prompt, round_num, None, response, is_final=True)
+                logger.warning("Failed to parse response on round %d, returning raw", round_num)
+                return response
+
+            actions = middleware.validate_actions(parsed.get("actions", []))
+            is_done = all(a["type"] == "none" for a in actions)
+            middleware.log_round(prompt, round_num, parsed, response, is_final=is_done)
+
+            if is_done:
+                final_answer = parsed.get("final_answer", "")
+                return final_answer.strip() if isinstance(final_answer, str) and final_answer.strip() else response
+
+            logger.info("Round %d: executing %d action(s)", round_num + 1, len(actions))
+            results = await execute_actions(actions)
+            results_text = format_results_for_claude(results)
+            response = await self._run_claude(["--continue", "--allowedTools", ""], results_text)
+
+        logger.warning("Tool loop exhausted after %d rounds", MAX_TOOL_ROUNDS)
+        return "I was unable to complete the task within the allowed number of steps."

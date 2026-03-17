@@ -24,7 +24,23 @@ def _strip_fence(text: str) -> str:
     return m.group(1).strip() if m else text
 
 
+def parse(raw: str) -> dict | None:
+    """Parse Claude's JSON response. Requires 'thought' and 'actions' fields."""
+    cleaned = _strip_fence(raw)
+    for candidate in [cleaned, cleaned[cleaned.find("{"):] if "{" in cleaned else ""]:
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict) and "thought" in data and "actions" in data:
+                return data
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
 def _parse_response(raw: str) -> dict | None:
+    """Legacy parse that also requires 'final_answer'."""
     cleaned = _strip_fence(raw)
     for candidate in [cleaned, cleaned[cleaned.find("{"):] if "{" in cleaned else ""]:
         if not candidate:
@@ -36,6 +52,11 @@ def _parse_response(raw: str) -> dict | None:
         except json.JSONDecodeError:
             pass
     return None
+
+
+def validate_actions(actions) -> list[dict]:
+    """Validate and normalise an actions list. Public API."""
+    return _validate_actions(actions)
 
 
 def _validate_actions(actions) -> list[dict]:
@@ -55,11 +76,57 @@ def _validate_actions(actions) -> list[dict]:
             "type": action_type,
             "input": str(entry.get("input", "")),
             "reason": str(entry.get("reason", "")),
+            # preserve content for write_file
+            **({"content": entry["content"]} if "content" in entry else {}),
         })
     return validated or [{"type": "none", "input": "", "reason": "no valid actions found"}]
 
 
-def _write_log(prompt: str, parsed: dict | None, raw: str) -> None:
+def _write_log_entry(entry: dict) -> None:
+    try:
+        with open(_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.error("middleware: failed to write log: %s", e)
+
+
+def log_round(prompt: str, round_num: int, parsed: dict | None, raw: str, *, is_final: bool) -> None:
+    """Log one execution round to actions.log."""
+    now = datetime.now(timezone.utc).isoformat()
+    if parsed is not None:
+        entry = {
+            "ts": now,
+            "round": round_num,
+            "is_final": is_final,
+            "prompt_snippet": prompt[:120],
+            "thought": parsed.get("thought", ""),
+            "actions": parsed.get("actions", []),
+            "final_answer_snippet": str(parsed.get("final_answer", ""))[:120],
+            "parse_ok": True,
+        }
+    else:
+        entry = {
+            "ts": now,
+            "round": round_num,
+            "is_final": is_final,
+            "prompt_snippet": prompt[:120],
+            "thought": None,
+            "actions": [],
+            "final_answer_snippet": raw[:120],
+            "parse_ok": False,
+        }
+    _write_log_entry(entry)
+
+
+def process(prompt: str, raw: str) -> str:
+    """Parse Claude's structured output, log it, and return final_answer.
+    Falls back to returning raw if parsing fails. Kept for backward compat."""
+    parsed = _parse_response(raw)
+    if parsed is not None:
+        parsed["actions"] = _validate_actions(parsed["actions"])
+    else:
+        logger.warning("middleware: unstructured response — returning raw")
+
     now = datetime.now(timezone.utc).isoformat()
     if parsed is not None:
         entry = {
@@ -79,22 +146,8 @@ def _write_log(prompt: str, parsed: dict | None, raw: str) -> None:
             "final_answer_snippet": raw[:120],
             "parse_ok": False,
         }
-    try:
-        with open(_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except OSError as e:
-        logger.error("middleware: failed to write log: %s", e)
+    _write_log_entry(entry)
 
-
-def process(prompt: str, raw: str) -> str:
-    """Parse Claude's structured output, log it, and return final_answer.
-    Falls back to returning raw if parsing fails."""
-    parsed = _parse_response(raw)
-    if parsed is not None:
-        parsed["actions"] = _validate_actions(parsed["actions"])
-    else:
-        logger.warning("middleware: unstructured response — returning raw")
-    _write_log(prompt, parsed, raw)
     if parsed is None:
         return raw
     final_answer = parsed.get("final_answer", "")
