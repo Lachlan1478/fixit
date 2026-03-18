@@ -25,9 +25,9 @@
     header { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; }
     header h1 { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .3s; }
-    .status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.live    { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .status-dot.working { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); animation: pulse 1s ease-in-out infinite; }
-    .status-dot.error { background: var(--red); }
+    .status-dot.error   { background: var(--red); }
     .status-dot.limited { background: var(--yellow); }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
     .status-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
@@ -48,12 +48,32 @@
     .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Response */
-    #response-box { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 12px; margin-top: 12px; }
-    #response-box pre { white-space: pre-wrap; word-break: break-word; font-family: 'Menlo','Consolas',monospace; font-size: 13px; color: var(--text); line-height: 1.6; }
+    /* Model selector */
+    .model-row { display: flex; gap: 6px; margin-bottom: 10px; }
+    .model-btn { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; flex: 1; text-align: center; }
+    .model-btn:hover { border-color: var(--accent); color: var(--text); }
+    .model-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .model-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* Conversation history */
+    #history-list { display: flex; flex-direction: column; gap: 12px; max-height: 420px; overflow-y: auto; }
+    .history-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px 0; }
+    .chat-turn { display: flex; flex-direction: column; gap: 8px; }
+    .chat-user { align-self: flex-end; max-width: 85%; }
+    .chat-assistant { align-self: flex-start; max-width: 95%; }
+    .chat-bubble { border-radius: 12px; padding: 10px 14px; font-size: 14px; line-height: 1.55; }
+    .chat-user .chat-bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+    .chat-assistant .chat-bubble { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-bottom-left-radius: 4px; }
+    .chat-meta { font-size: 10px; color: var(--muted); margin-top: 3px; padding: 0 4px; }
+    .chat-user .chat-meta { text-align: right; }
+    .chat-bubble code { background: rgba(255,255,255,.12); border-radius: 3px; padding: 1px 5px; font-family: 'Menlo','Consolas',monospace; font-size: 12px; }
+    .chat-bubble pre { background: rgba(0,0,0,.3); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 6px 0; }
+    .chat-bubble pre code { background: none; padding: 0; font-size: 12px; }
+    .chat-bubble strong { font-weight: 700; }
+    .chat-bubble em { font-style: italic; }
 
     /* Live feed */
-    #feed-list { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
+    #feed-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
     .feed-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px 0; }
     .feed-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; border-left-width: 3px; }
     .feed-item.tool   { border-left-color: var(--accent); }
@@ -68,6 +88,30 @@
     .feed-item.error  .feed-label { color: var(--red); }
     .feed-item.status .feed-label { color: var(--yellow); }
     .feed-time { font-size: 10px; font-weight: 400; color: var(--muted); letter-spacing: 0; text-transform: none; margin-left: auto; }
+
+    /* File browser */
+    #file-browser { margin-top: 4px; }
+    .fb-breadcrumb { font-size: 11px; color: var(--muted); font-family: 'Menlo','Consolas',monospace; margin-bottom: 8px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+    .fb-breadcrumb span { cursor: pointer; color: var(--accent); }
+    .fb-breadcrumb span:hover { text-decoration: underline; }
+    .fb-breadcrumb .sep { color: var(--border); cursor: default; }
+    .fb-tree { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+    .fb-entry { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: 'Menlo','Consolas',monospace; transition: background .15s; user-select: none; }
+    .fb-entry:hover { background: var(--surface2); }
+    .fb-entry .fb-icon { font-size: 14px; width: 18px; text-align: center; flex-shrink: 0; }
+    .fb-entry .fb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fb-entry .fb-size { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+    .fb-entry.dir { color: var(--accent); }
+    .fb-entry.file { color: var(--text); }
+
+    /* File viewer overlay */
+    #file-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 50; padding: 16px; }
+    #file-overlay.open { display: flex; flex-direction: column; }
+    .fo-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .fo-path { font-size: 12px; font-family: 'Menlo','Consolas',monospace; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fo-close { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer; flex-shrink: 0; }
+    .fo-content { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; flex: 1; overflow-y: auto; }
+    .fo-content pre { white-space: pre-wrap; word-break: break-all; font-family: 'Menlo','Consolas',monospace; font-size: 12px; color: var(--text); line-height: 1.6; }
 
     /* Repository */
     .files-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; min-height: 20px; }
@@ -100,6 +144,13 @@
 </head>
 <body>
 <div id="toast"></div>
+<div id="file-overlay">
+  <div class="fo-header">
+    <div class="fo-path" id="fo-path"></div>
+    <button class="fo-close" onclick="closeFileOverlay()">✕ Close</button>
+  </div>
+  <div class="fo-content"><pre id="fo-content"></pre></div>
+</div>
 <div id="rate-limit-banner">
   <div class="rl-title">⏳ Claude Usage Limit Reached</div>
   <div class="rl-countdown" id="rl-countdown">—</div>
@@ -118,13 +169,25 @@
   <!-- Prompt -->
   <section>
     <div class="section-title">Send Prompt</div>
+    <div class="model-row">
+      <button class="model-btn" data-model="haiku" onclick="selectModel('haiku')">Haiku</button>
+      <button class="model-btn active" data-model="sonnet" onclick="selectModel('sonnet')">Sonnet</button>
+      <button class="model-btn" data-model="opus" onclick="selectModel('opus')">Opus</button>
+    </div>
     <textarea id="prompt" placeholder="Ask Claude to do something…" rows="4"></textarea>
     <div class="form-row">
       <button id="send-btn" onclick="sendPrompt()">Send →</button>
       <div class="spinner" id="spinner"></div>
       <button class="danger" id="reset-btn" onclick="resetSession()" title="Start fresh conversation">Reset</button>
     </div>
-    <div id="response-box"><pre id="response-text"></pre></div>
+  </section>
+
+  <!-- Conversation history -->
+  <section>
+    <div class="section-title">
+      <span>Conversation <span id="history-count" style="font-weight:400;opacity:.6"></span></span>
+    </div>
+    <div id="history-list"><div class="history-empty">No conversation yet</div></div>
   </section>
 
   <!-- Live feed -->
@@ -134,6 +197,18 @@
       <button class="secondary" onclick="clearFeed()">Clear</button>
     </div>
     <div id="feed-list"><div class="feed-empty">No activity yet</div></div>
+  </section>
+
+  <!-- File browser -->
+  <section>
+    <div class="section-title">
+      <span>Files</span>
+      <button class="secondary" id="browse-btn" onclick="toggleFileBrowser()">Browse</button>
+    </div>
+    <div id="file-browser" style="display:none">
+      <div class="fb-breadcrumb" id="fb-breadcrumb"></div>
+      <div class="fb-tree" id="fb-tree"></div>
+    </div>
   </section>
 
   <!-- Repository -->
@@ -155,9 +230,16 @@
 
 </div>
 <script>
+// ── Model selector ─────────────────────────────────────────────────────────
+let _model = 'sonnet';
+function selectModel(m) {
+  _model = m;
+  document.querySelectorAll('.model-btn').forEach(b => b.classList.toggle('active', b.dataset.model === m));
+}
+
 // ── Rate-limit state ───────────────────────────────────────────────────────
-let _rateLimitResetAt = null;   // Date object
-let _pendingPrompt    = null;   // prompt queued while rate-limited
+let _rateLimitResetAt = null;
+let _pendingPrompt    = null;
 let _countdownTimer   = null;
 let _pollTimer        = null;
 
@@ -167,11 +249,9 @@ function showRateLimitBanner(resetAtIso, message) {
   const banner = document.getElementById('rate-limit-banner');
   const body   = document.getElementById('rl-body');
   banner.style.display = 'block';
-  if (_rateLimitResetAt) {
-    body.textContent = `Resets at ${_rateLimitResetAt.toLocaleTimeString()} — will resume automatically.`;
-  } else {
-    body.textContent = message || 'Waiting for limit to reset…';
-  }
+  body.textContent = _rateLimitResetAt
+    ? `Resets at ${_rateLimitResetAt.toLocaleTimeString()} — will resume automatically.`
+    : (message || 'Waiting for limit to reset…');
   _startCountdown();
   _startRateLimitPolling();
 }
@@ -210,7 +290,6 @@ function _startRateLimitPolling() {
         hideRateLimitBanner();
         setStatus('live');
         addFeedItem('done', 'Rate Limit', 'Usage limit reset — ready to continue');
-        // Auto-resubmit if there was a pending prompt
         if (_pendingPrompt) {
           const prompt = _pendingPrompt;
           _pendingPrompt = null;
@@ -219,21 +298,21 @@ function _startRateLimitPolling() {
           setTimeout(sendPrompt, 1000);
         }
       }
-    } catch (_) { /* ignore transient errors */ }
-  }, 10000); // poll every 10 s
+    } catch (_) {}
+  }, 10000);
 }
 
-// ── Status ────────────────────────────────────────────────────────────────
+// ── Status ─────────────────────────────────────────────────────────────────
 function setStatus(state) {
   document.getElementById('status-dot').className = 'status-dot ' + state;
   document.getElementById('status-text').textContent =
-    state === 'live'    ? 'live'      :
-    state === 'working' ? 'working…'  :
-    state === 'error'   ? 'error'     :
-    state === 'limited' ? 'rate limited' : 'connecting…';
+    state === 'live'    ? 'live'          :
+    state === 'working' ? 'working…'      :
+    state === 'error'   ? 'error'         :
+    state === 'limited' ? 'rate limited'  : 'connecting…';
 }
 
-// ── Toast ─────────────────────────────────────────────────────────────────
+// ── Toast ──────────────────────────────────────────────────────────────────
 let _toastTimer;
 function showToast(msg) {
   const el = document.getElementById('toast');
@@ -242,7 +321,86 @@ function showToast(msg) {
   _toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
 
-// ── Feed ──────────────────────────────────────────────────────────────────
+// ── Utils ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
+  return (bytes / 1024 / 1024).toFixed(1) + 'M';
+}
+
+function fmtTime(iso) {
+  try { return new Date(iso).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+  catch { return ''; }
+}
+
+// Simple markdown → HTML (bold, italic, inline code, code blocks, newlines)
+function renderMd(text) {
+  let s = escHtml(text);
+  // Code blocks
+  s = s.replace(/```[\w]*\n?([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+  // Inline code
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Newlines (outside pre blocks)
+  s = s.replace(/\n/g, '<br>');
+  return s;
+}
+
+// ── Conversation history ───────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const data = await fetch('/history/default').then(r => r.json());
+    renderHistory(data.history || []);
+  } catch (_) {}
+}
+
+function renderHistory(turns) {
+  const list = document.getElementById('history-list');
+  const countEl = document.getElementById('history-count');
+  if (!turns.length) {
+    list.innerHTML = '<div class="history-empty">No conversation yet</div>';
+    countEl.textContent = '';
+    return;
+  }
+
+  // Group consecutive user+assistant pairs into turns
+  const html = [];
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+    if (t.role === 'user') {
+      html.push(`<div class="chat-turn">
+        <div class="chat-user">
+          <div class="chat-bubble">${escHtml(t.content)}</div>
+          <div class="chat-meta">${fmtTime(t.ts)}</div>
+        </div>`);
+      // peek at next for assistant response
+      const next = turns[i + 1];
+      if (next && next.role === 'assistant') {
+        const modelLabel = next.model ? next.model.replace('claude-','').replace(/-\d{8,}/,'') : '';
+        html.push(`<div class="chat-assistant">
+          <div class="chat-bubble">${renderMd(next.content)}</div>
+          <div class="chat-meta">${fmtTime(next.ts)}${modelLabel ? ' · ' + modelLabel : ''}</div>
+        </div>`);
+        i++; // skip assistant turn
+      }
+      html.push('</div>');
+    }
+  }
+  list.innerHTML = html.join('');
+  list.scrollTop = list.scrollHeight;
+
+  const pairs = Math.floor(turns.length / 2);
+  countEl.textContent = pairs ? `${pairs} turn${pairs !== 1 ? 's' : ''}` : '';
+}
+
+// ── Feed ───────────────────────────────────────────────────────────────────
 let _hasFeed = false;
 function clearFeed() {
   document.getElementById('feed-list').innerHTML = '<div class="feed-empty">No activity yet</div>';
@@ -262,12 +420,7 @@ function addFeedItem(type, label, summary, elapsed_ms) {
   list.scrollTop = list.scrollHeight;
 }
 
-// ── Utils ─────────────────────────────────────────────────────────────────
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-// ── Send prompt ───────────────────────────────────────────────────────────
+// ── Send prompt ────────────────────────────────────────────────────────────
 async function sendPrompt() {
   const textarea = document.getElementById('prompt');
   const prompt = textarea.value.trim();
@@ -275,21 +428,18 @@ async function sendPrompt() {
 
   const btn     = document.getElementById('send-btn');
   const spinner = document.getElementById('spinner');
-  const box     = document.getElementById('response-box');
-  const pre     = document.getElementById('response-text');
 
   btn.disabled = true;
   spinner.style.display = 'block';
-  box.style.display = 'none';
   setStatus('working');
-  _pendingPrompt = prompt;   // save in case we hit a rate limit
+  _pendingPrompt = prompt;
   textarea.value = '';
 
   try {
     const resp = await fetch('/task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, agent_id: 'default' }),
+      body: JSON.stringify({ prompt, agent_id: 'default', model: _model }),
     });
 
     if (!resp.ok) {
@@ -306,22 +456,20 @@ async function sendPrompt() {
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split('\n');
-      buf = lines.pop(); // keep incomplete line
+      buf = lines.pop();
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         let event;
         try { event = JSON.parse(line.slice(6)); } catch { continue; }
-        handleEvent(event, pre, box);
+        handleEvent(event);
       }
     }
 
-    // Only mark live if we're not currently rate-limited
     if (!_rateLimitResetAt) {
       setStatus('live');
       _pendingPrompt = null;
     }
-    // Refresh repo after Claude finishes
-    setTimeout(loadRepo, 800);
+    setTimeout(() => { loadRepo(); loadHistory(); }, 800);
 
   } catch (err) {
     setStatus('error');
@@ -333,7 +481,7 @@ async function sendPrompt() {
   }
 }
 
-function handleEvent(event, pre, box) {
+function handleEvent(event) {
   if (event.type === 'status') {
     addFeedItem('status', 'Init', event.message, event.elapsed_ms);
   } else if (event.type === 'tool') {
@@ -342,8 +490,6 @@ function handleEvent(event, pre, box) {
     addFeedItem('text', 'Thinking', event.content.slice(0, 120));
   } else if (event.type === 'done') {
     addFeedItem('done', 'Done', event.result.slice(0, 100) || '✓');
-    pre.textContent = event.result || '(no response)';
-    box.style.display = 'block';
   } else if (event.type === 'error') {
     addFeedItem('error', 'Error', event.message);
     showToast(event.message);
@@ -354,7 +500,7 @@ function handleEvent(event, pre, box) {
   }
 }
 
-// ── Reset session ─────────────────────────────────────────────────────────
+// ── Reset session ──────────────────────────────────────────────────────────
 async function resetSession() {
   try {
     await fetch('/reset_memory', {
@@ -363,14 +509,89 @@ async function resetSession() {
       body: JSON.stringify({ agent_id: 'default' }),
     });
     clearFeed();
-    document.getElementById('response-box').style.display = 'none';
+    renderHistory([]);
     addFeedItem('done', 'Session', 'Conversation reset — starting fresh');
   } catch (err) {
     showToast('Reset failed: ' + err.message);
   }
 }
 
-// ── Repository ────────────────────────────────────────────────────────────
+// ── File browser ───────────────────────────────────────────────────────────
+let _fbVisible = false;
+let _fbPath = '';
+
+function toggleFileBrowser() {
+  _fbVisible = !_fbVisible;
+  document.getElementById('file-browser').style.display = _fbVisible ? 'block' : 'none';
+  document.getElementById('browse-btn').textContent = _fbVisible ? 'Hide' : 'Browse';
+  if (_fbVisible) loadFiles(_fbPath);
+}
+
+async function loadFiles(path) {
+  _fbPath = path;
+  const tree = document.getElementById('fb-tree');
+  tree.innerHTML = '<div class="fb-entry" style="color:var(--muted)">Loading…</div>';
+  renderBreadcrumb(path);
+  try {
+    const data = await fetch(`/files?path=${encodeURIComponent(path)}`).then(r => r.json());
+    const items = [];
+    if (path) {
+      // Back entry
+      const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+      items.push(`<div class="fb-entry dir" onclick="loadFiles('${escHtml(parent)}')">
+        <span class="fb-icon">↩</span><span class="fb-name">..</span>
+      </div>`);
+    }
+    for (const d of data.dirs) {
+      items.push(`<div class="fb-entry dir" onclick="loadFiles('${escHtml(d.path)}')">
+        <span class="fb-icon">📁</span><span class="fb-name">${escHtml(d.name)}</span>
+      </div>`);
+    }
+    for (const f of data.files) {
+      items.push(`<div class="fb-entry file" onclick="openFile('${escHtml(f.path)}','${escHtml(f.name)}')">
+        <span class="fb-icon">📄</span>
+        <span class="fb-name">${escHtml(f.name)}</span>
+        <span class="fb-size">${fmtSize(f.size)}</span>
+      </div>`);
+    }
+    tree.innerHTML = items.length ? items.join('') : '<div style="color:var(--muted);font-size:13px;padding:8px">Empty directory</div>';
+  } catch (err) {
+    tree.innerHTML = `<div style="color:var(--red);font-size:13px;padding:8px">Error: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function renderBreadcrumb(path) {
+  const el = document.getElementById('fb-breadcrumb');
+  const parts = path ? path.split('/') : [];
+  let html = `<span onclick="loadFiles('')">workspace</span>`;
+  let built = '';
+  for (const p of parts) {
+    built = built ? built + '/' + p : p;
+    const captured = built;
+    html += `<span class="sep">/</span><span onclick="loadFiles('${escHtml(captured)}')">${escHtml(p)}</span>`;
+  }
+  el.innerHTML = html;
+}
+
+async function openFile(path, name) {
+  const overlay = document.getElementById('file-overlay');
+  const content = document.getElementById('fo-content');
+  document.getElementById('fo-path').textContent = path;
+  content.textContent = 'Loading…';
+  overlay.classList.add('open');
+  try {
+    const data = await fetch(`/file?path=${encodeURIComponent(path)}`).then(r => r.json());
+    content.textContent = data.exists ? (data.content || '(empty)') : '(file not found)';
+  } catch (err) {
+    content.textContent = 'Error: ' + err.message;
+  }
+}
+
+function closeFileOverlay() {
+  document.getElementById('file-overlay').classList.remove('open');
+}
+
+// ── Repository ─────────────────────────────────────────────────────────────
 function renderGitStatus(text) {
   if (!text) return '<span class="gs-branch">Not a git repo</span>';
   return text.split('\n').map(line => {
@@ -403,16 +624,13 @@ async function loadRepo() {
     setStatus('live');
     const filesEl = document.getElementById('repo-files');
     if (data.modified_files && data.modified_files.length > 0) {
-      filesEl.innerHTML = data.modified_files
-        .map(f => `<span class="file-chip">${escHtml(f)}</span>`).join('');
+      filesEl.innerHTML = data.modified_files.map(f => `<span class="file-chip">${escHtml(f)}</span>`).join('');
     } else {
       filesEl.innerHTML = '<span style="color:var(--muted);font-size:13px">No modified files</span>';
     }
     document.getElementById('repo-status').innerHTML = renderGitStatus(data.status || '');
     document.getElementById('repo-diff').innerHTML = renderGitDiff(data.diff || '');
-  } catch (err) {
-    setStatus('error');
-  }
+  } catch (_) { setStatus('error'); }
 }
 
 // Enter = submit, Shift+Enter = newline
@@ -420,11 +638,17 @@ document.getElementById('prompt').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
 });
 
+// Close file overlay on background click
+document.getElementById('file-overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeFileOverlay();
+});
+
 // Initial load
 loadRepo().then(() => setStatus('live'));
+loadHistory();
 setInterval(() => { if (!document.hidden) loadRepo(); }, 15000);
 
-// Restore rate-limit banner if server is still limited (e.g. after page refresh)
+// Restore rate-limit banner on refresh
 fetch('/rate_limit_status').then(r => r.json()).then(data => {
   if (data.is_limited) {
     setStatus('limited');

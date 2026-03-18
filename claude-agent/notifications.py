@@ -30,7 +30,7 @@ async def send_notification(message: str) -> bool:
     Send *message* via the first configured and successful channel.
     Returns True if at least one channel succeeded.
     """
-    for channel in (_send_sms, _send_email, _send_discord):
+    for channel in (_send_ntfy, _send_sms, _send_email, _send_discord):
         try:
             if await channel(message):
                 return True
@@ -38,6 +38,27 @@ async def send_notification(message: str) -> bool:
             logger.error("Notification channel %s raised: %s", channel.__name__, exc)
     logger.warning("All notification channels failed or unconfigured")
     return False
+
+
+async def _send_ntfy(message: str) -> bool:
+    topic = os.getenv("NTFY_TOPIC")
+    if not topic:
+        logger.debug("ntfy channel not configured (set NTFY_TOPIC)")
+        return False
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"https://ntfy.sh/{topic}",
+            data=message.encode(),
+            headers={"Title": "Claude Agent", "Priority": "high"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status == 200:
+                logger.info("ntfy notification sent to topic %s", topic)
+                return True
+            body = await resp.text()
+            logger.warning("ntfy failed (%s): %s", resp.status, body[:200])
+            return False
 
 
 async def _send_sms(message: str) -> bool:

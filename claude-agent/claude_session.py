@@ -31,6 +31,20 @@ LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
 # Maps agent_id → Claude Code session_id for --resume
 _agent_sessions: dict[str, str] = {}
 
+# Conversation history per agent_id
+_conversation_history: dict[str, list[dict]] = {}
+
+# Short name → full model ID
+_MODELS: dict[str, str] = {
+    "haiku":  "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-6",
+    "opus":   "claude-opus-4-6",
+}
+
+
+def get_history(agent_id: str) -> list[dict]:
+    return _conversation_history.get(agent_id, [])
+
 # Tool name → human-readable label for the UI feed
 _TOOL_LABELS = {
     "Write":      "Writing",
@@ -94,7 +108,7 @@ def _summarise_tool(name: str, inp: dict) -> str:
 
 # ── Main streaming function ───────────────────────────────────────────────────
 
-async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[dict]:
+async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet") -> AsyncIterator[dict]:
     """
     Run Claude Code non-interactively and yield UI-ready events:
 
@@ -110,11 +124,13 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
     task_start_ms = _now_ms()
     task_start_ts = _now_iso()
 
+    model_id = _MODELS.get(model, _MODELS["sonnet"])
     cmd = [
         "claude", "--print",
         "--output-format", "stream-json",
         "--verbose",
         "--dangerously-skip-permissions",
+        "--model", model_id,
     ]
     if session_id:
         cmd += ["--resume", session_id]
@@ -412,6 +428,12 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
     }
     _write_jsonl("sessions.jsonl", session_summary)
 
+    # Append to in-memory conversation history
+    turns = _conversation_history.setdefault(agent_id, [])
+    turns.append({"role": "user", "content": prompt, "ts": task_start_ts})
+    if result_text:
+        turns.append({"role": "assistant", "content": result_text, "ts": _now_iso(), "model": model_id})
+
     logger.info(
         "Task done | agent=%s total_ms=%.0f tools=%d turns=%s cost=$%.4f exit=%s",
         agent_id, total_ms, len(tool_calls), num_turns,
@@ -420,8 +442,9 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
 
 
 def reset_session(agent_id: str) -> None:
-    """Clear stored session_id so the next prompt starts a fresh conversation."""
+    """Clear stored session_id and conversation history for a fresh start."""
     _agent_sessions.pop(agent_id, None)
+    _conversation_history.pop(agent_id, None)
     logger.info("Session reset for agent_id=%r", agent_id)
     _write_jsonl("events.jsonl", {
         "ts": _now_iso(), "agent_id": agent_id, "event": "session_reset",

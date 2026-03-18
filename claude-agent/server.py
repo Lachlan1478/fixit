@@ -48,6 +48,7 @@ async def root():
 class TaskRequest(BaseModel):
     prompt: str
     agent_id: str = "default"
+    model: str = "sonnet"  # haiku | sonnet | opus
 
 
 class ResetMemoryRequest(BaseModel):
@@ -67,7 +68,7 @@ async def run_task(request: TaskRequest):
         event_count = 0
         logger.info("Request | agent=%s prompt=%r", agent_id, request.prompt[:60])
         try:
-            async for event in cs.stream_task(request.prompt, agent_id):
+            async for event in cs.stream_task(request.prompt, agent_id, request.model):
                 event_count += 1
                 if event.get("type") == "rate_limited":
                     reset_at_str = event.get("reset_at")
@@ -105,6 +106,37 @@ async def run_task(request: TaskRequest):
 async def rate_limit_status():
     """Return current rate-limit state so the UI can show a countdown."""
     return rl.get_state().to_dict()
+
+
+@app.get("/history/{agent_id}")
+async def get_history(agent_id: str):
+    return {"history": cs.get_history(agent_id)}
+
+
+@app.get("/files")
+async def list_files(path: str = ""):
+    if path:
+        abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
+    else:
+        abs_path = WORKSPACE_ROOT
+    if not (abs_path.startswith(WORKSPACE_ROOT + os.sep) or abs_path == WORKSPACE_ROOT):
+        raise HTTPException(status_code=400, detail="Path outside workspace")
+    if not os.path.isdir(abs_path):
+        raise HTTPException(status_code=404, detail="Not a directory")
+
+    dirs, files = [], []
+    for entry in sorted(os.listdir(abs_path), key=str.lower):
+        if entry.startswith('.'):
+            continue
+        entry_abs = os.path.join(abs_path, entry)
+        rel = os.path.relpath(entry_abs, WORKSPACE_ROOT).replace("\\", "/")
+        if os.path.isdir(entry_abs):
+            dirs.append({"name": entry, "path": rel})
+        else:
+            files.append({"name": entry, "path": rel, "size": os.path.getsize(entry_abs)})
+
+    rel_cur = os.path.relpath(abs_path, WORKSPACE_ROOT).replace("\\", "/")
+    return {"path": "" if rel_cur == "." else rel_cur, "dirs": dirs, "files": files}
 
 
 @app.post("/reset_memory")
