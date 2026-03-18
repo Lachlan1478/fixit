@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-VALID_ACTION_TYPES = {"read_file", "write_file", "shell", "none"}
+VALID_ACTION_TYPES = {"read_file", "write_file", "shell", "none", "git_status", "git_diff", "git_add", "git_commit"}
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 _LOG_FILE = os.path.join(_LOGS_DIR, "actions.log")
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
@@ -88,6 +88,32 @@ def _write_log_entry(entry: dict) -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError as e:
         logger.error("middleware: failed to write log: %s", e)
+
+
+def log_approval(entry_id: str, action: dict, status: str, result: dict | None) -> None:
+    """Log an approval or rejection decision to actions.log."""
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": "approval",
+        "id": entry_id,
+        "action_type": action.get("type", ""),
+        "input_snippet": str(action.get("input", ""))[:120],
+        "status": status,
+        "error": result.get("error") if result else None,
+    }
+    _write_log_entry(entry)
+
+
+def log_action_decision(action: dict, decision: str) -> None:
+    """Log a per-action control decision to actions.log."""
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": "decision",
+        "action_type": action.get("type", ""),
+        "input_snippet": str(action.get("input", ""))[:120],
+        "decision": decision,
+    }
+    _write_log_entry(entry)
 
 
 def log_round(prompt: str, round_num: int, parsed: dict | None, raw: str, *, is_final: bool) -> None:

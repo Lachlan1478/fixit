@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Agent</title>
+  <style>
+    :root {
+      --bg: #0f0f11;
+      --surface: #1a1a1f;
+      --surface2: #24242b;
+      --border: #2e2e38;
+      --text: #e8e8f0;
+      --muted: #888899;
+      --accent: #7c6af7;
+      --allow: #22c55e;
+      --review: #eab308;
+      --deny: #ef4444;
+      --approved: #22c55e;
+      --denied: #ef4444;
+      --r: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui,-apple-system,sans-serif; font-size: 15px; line-height: 1.5; }
+    .container { max-width: 480px; margin: 0 auto; padding-bottom: 48px; }
+
+    /* Header */
+    header { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; }
+    header h1 { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .3s; }
+    .status-dot.live { background: var(--allow); box-shadow: 0 0 6px var(--allow); }
+    .status-dot.error { background: var(--deny); }
+    .status-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+    /* Toast */
+    #toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: var(--deny); color: #fff; padding: 10px 18px; border-radius: var(--r); font-size: 13px; z-index: 100; display: none; max-width: 440px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,.4); }
+
+    /* Sections */
+    section { padding: 16px; border-bottom: 1px solid var(--border); }
+    .section-title { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .badge { background: var(--review); color: #000; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; }
+
+    /* Form */
+    textarea { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); color: var(--text); padding: 12px; font-size: 15px; font-family: inherit; resize: vertical; min-height: 90px; outline: none; transition: border-color .2s; }
+    textarea:focus { border-color: var(--accent); }
+    .form-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+
+    /* Buttons */
+    button { background: var(--accent); color: #fff; border: none; border-radius: var(--r); padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .2s; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button:not(:disabled):hover { opacity: .85; }
+    button.secondary { background: var(--surface2); color: var(--text); font-weight: 500; padding: 8px 14px; font-size: 13px; }
+    button.sm { background: var(--surface2); color: var(--muted); padding: 4px 10px; font-size: 12px; font-weight: 400; border-radius: 5px; }
+    button.sm:not(:disabled):hover { color: var(--text); }
+    button.approve-btn { background: var(--approved); color: #000; padding: 8px 14px; font-size: 13px; }
+    button.deny-btn { background: var(--surface2); color: var(--deny); border: 1px solid var(--deny); padding: 8px 14px; font-size: 13px; }
+
+    /* Spinner */
+    .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Response */
+    #response-box { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 12px; margin-top: 12px; }
+    #response-box pre { white-space: pre-wrap; word-break: break-word; font-family: 'Menlo','Consolas',monospace; font-size: 13px; color: var(--text); line-height: 1.6; }
+
+    /* Pending cards */
+    #pending-list { display: flex; flex-direction: column; gap: 10px; }
+    .empty-state { color: var(--muted); font-size: 13px; text-align: center; padding: 16px 0; }
+    .action-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 12px 14px; border-left-width: 4px; }
+    .action-card.c-allow    { border-left-color: var(--allow); }
+    .action-card.c-review   { border-left-color: var(--review); }
+    .action-card.c-deny     { border-left-color: var(--deny); }
+    .action-card.c-approved { border-left-color: var(--approved); }
+    .action-card.c-denied   { border-left-color: var(--denied); }
+    .card-type { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .c-allow .card-dot  { background: var(--allow); }
+    .c-review .card-dot { background: var(--review); }
+    .c-deny .card-dot   { background: var(--deny); }
+    .card-input { font-size: 12px; color: var(--muted); font-family: 'Menlo','Consolas',monospace; white-space: pre-wrap; word-break: break-all; margin-bottom: 6px; max-height: 80px; overflow: hidden; }
+    .card-reason { font-size: 12px; color: var(--muted); margin-bottom: 8px; font-style: italic; }
+    .card-note { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+    .card-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .outcome-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 20px; margin-top: 8px; }
+    .outcome-chip.approved { background: rgba(34,197,94,.15); color: var(--approved); }
+    .outcome-chip.rejected, .outcome-chip.failed { background: rgba(239,68,68,.15); color: var(--denied); }
+
+    /* Inline diff */
+    .diff-toggle-row { margin: 6px 0 2px; }
+    .inline-diff { display: none; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-top: 6px; font-family: 'Menlo','Consolas',monospace; font-size: 11px; line-height: 1.6; overflow-x: auto; white-space: pre; max-height: 220px; overflow-y: auto; }
+
+    /* Diff colours (shared by cards + repo section) */
+    .d-add  { color: var(--allow); }
+    .d-del  { color: var(--deny); }
+    .d-hunk { color: var(--accent); }
+    .d-file { color: var(--text); font-weight: 600; }
+    .d-hdr  { color: var(--muted); }
+    .d-ctx  { color: var(--muted); }
+    .d-new  { color: var(--allow); font-style: italic; }
+
+    /* Repository section */
+    .files-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; min-height: 20px; }
+    .file-chip { background: var(--surface2); border-radius: 4px; padding: 2px 8px; font-size: 11px; font-family: 'Menlo','Consolas',monospace; color: var(--review); }
+    .repo-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; font-family: 'Menlo','Consolas',monospace; font-size: 12px; line-height: 1.6; overflow-x: auto; white-space: pre; max-height: 280px; overflow-y: auto; margin-bottom: 4px; }
+    details.repo-details { margin-top: 8px; }
+    details.repo-details summary { font-size: 12px; color: var(--muted); padding: 6px 0; cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
+    details.repo-details summary::before { content: '▶'; font-size: 9px; transition: transform .2s; }
+    details.repo-details[open] summary::before { transform: rotate(90deg); }
+    details.repo-details summary:hover { color: var(--text); }
+
+    /* Git status colours */
+    .gs-branch   { color: var(--accent); }
+    .gs-modified { color: var(--review); }
+    .gs-added    { color: var(--allow); }
+    .gs-deleted  { color: var(--deny); }
+    .gs-untracked { color: var(--muted); }
+
+    /* Activity log */
+    #log-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+    .log-entry { font-size: 12px; font-family: 'Menlo','Consolas',monospace; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+    .log-time { flex-shrink: 0; }
+    .log-type { color: var(--text); }
+    .log-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+    .log-status.allow, .log-status.approved { color: var(--allow); }
+    .log-status.review { color: var(--review); }
+    .log-status.deny, .log-status.rejected, .log-status.failed { color: var(--deny); }
+  </style>
+</head>
+<body>
+<div id="toast"></div>
+<div class="container">
+
+  <header>
+    <h1>🤖 Claude Agent</h1>
+    <div class="status-label">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">connecting…</span>
+    </div>
+  </header>
+
+  <!-- Send prompt -->
+  <section>
+    <div class="section-title">Send Prompt</div>
+    <textarea id="prompt" placeholder="Ask Claude to do something…" rows="4"></textarea>
+    <div class="form-row">
+      <button id="send-btn" onclick="sendPrompt()">Send →</button>
+      <div class="spinner" id="spinner"></div>
+    </div>
+    <div id="response-box"><pre id="response-text"></pre></div>
+  </section>
+
+  <!-- Pending actions -->
+  <section>
+    <div class="section-title">
+      <span>Pending Actions <span class="badge" id="pending-badge" style="display:none"></span></span>
+      <button class="secondary" onclick="loadPending()">Refresh</button>
+    </div>
+    <div id="pending-list"><div class="empty-state">No pending actions</div></div>
+  </section>
+
+  <!-- Repository -->
+  <section>
+    <div class="section-title">
+      <span>Repository</span>
+      <button class="secondary" onclick="loadRepo()">Refresh</button>
+    </div>
+    <div class="files-row" id="repo-files"><span class="empty-state" style="padding:0">No modified files</span></div>
+
+    <details class="repo-details" open>
+      <summary>Git Status</summary>
+      <pre class="repo-block" id="repo-status">—</pre>
+    </details>
+
+    <details class="repo-details">
+      <summary>Diff <span class="badge" id="diff-badge" style="display:none;margin-left:4px"></span></summary>
+      <pre class="repo-block" id="repo-diff">—</pre>
+    </details>
+  </section>
+
+  <!-- Activity log -->
+  <section>
+    <div class="section-title">Activity Log</div>
+    <div id="log-list"><div class="empty-state">No activity yet</div></div>
+  </section>
+
+</div>
+<script>
+// ── Decision logic (mirrors control.py) ──────────────────────────────────
+const DENY_SHELL  = [/\bgit\s+push\b/i, /\bdel\b/i, /\bformat\b/i];
+const SAFE_SHELL  = [/^\s*echo\b/i, /^\s*ls\b/i];
+
+function decideAction(action) {
+  const t = action.type || 'none';
+  const inp = action.input || '';
+  if (t === 'none')        return 'allow';
+  if (t === 'read_file')   return 'allow';
+  if (t === 'write_file')  return 'review';
+  if (t === 'git_status')  return 'allow';
+  if (t === 'git_diff')    return 'allow';
+  if (t === 'git_add')     return 'allow';
+  if (t === 'git_commit')  return 'review';
+  if (t === 'shell') {
+    if (DENY_SHELL.some(p => p.test(inp))) return 'deny';
+    if (SAFE_SHELL.some(p => p.test(inp))) return 'allow';
+    return 'review';
+  }
+  return 'review';
+}
+function decisionIcon(d) { return d === 'allow' ? '🟢' : d === 'review' ? '🟡' : '🔴'; }
+
+// ── Utilities ─────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function nowHMS() { return new Date().toTimeString().slice(0,8); }
+
+async function apiCall(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── Status dot ────────────────────────────────────────────────────────────
+function setStatus(state) {
+  document.getElementById('status-dot').className = 'status-dot ' + state;
+  document.getElementById('status-text').textContent =
+    state === 'live' ? 'live' : state === 'error' ? 'error' : 'connecting…';
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+let _toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.style.display = 'block';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+// ── Activity log ──────────────────────────────────────────────────────────
+let _hasLog = false;
+function addLog(actionType, inputSnippet, status) {
+  const c = document.getElementById('log-list');
+  if (!_hasLog) { c.innerHTML = ''; _hasLog = true; }
+  const e = document.createElement('div');
+  e.className = 'log-entry';
+  e.innerHTML =
+    `<span class="log-time">${nowHMS()}</span>` +
+    `<span class="log-type">${escHtml(actionType)}</span>` +
+    `<span class="log-snippet">${escHtml(String(inputSnippet).slice(0,40))}</span>` +
+    `<span>→</span>` +
+    `<span class="log-status ${status}">${status}</span>`;
+  c.prepend(e);
+}
+
+// ── Diff computation (LCS) ────────────────────────────────────────────────
+function computeDiff(oldText, newText) {
+  const a = (oldText || '').split('\n');
+  const b = (newText || '').split('\n');
+  if (a.length > 400 || b.length > 400) {
+    return b.map(l => ({t:'add', l}));
+  }
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m+1}, () => new Int32Array(n+1));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1]+1 : Math.max(dp[i-1][j], dp[i][j-1]);
+  const out = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i>0 && j>0 && a[i-1]===b[j-1]) { out.unshift({t:'eq',  l:a[i-1]}); i--; j--; }
+    else if (j>0 && (i===0 || dp[i][j-1]>=dp[i-1][j])) { out.unshift({t:'add', l:b[j-1]}); j--; }
+    else { out.unshift({t:'del', l:a[i-1]}); i--; }
+  }
+  return out;
+}
+function renderDiffLines(hunks) {
+  return hunks.map(h => {
+    const cls = h.t==='add' ? 'd-add' : h.t==='del' ? 'd-del' : 'd-ctx';
+    const pfx = h.t==='add' ? '+' : h.t==='del' ? '-' : ' ';
+    return `<span class="${cls}">${pfx}${escHtml(h.l)}</span>`;
+  }).join('\n');
+}
+
+// ── Git diff / status rendering ───────────────────────────────────────────
+function renderGitDiff(text) {
+  if (!text) return '<span class="d-ctx">No changes</span>';
+  return text.split('\n').map(line => {
+    if (line.startsWith('diff --git')) return `<span class="d-file">${escHtml(line)}</span>`;
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ')) return `<span class="d-hdr">${escHtml(line)}</span>`;
+    if (line.startsWith('+')) return `<span class="d-add">${escHtml(line)}</span>`;
+    if (line.startsWith('-')) return `<span class="d-del">${escHtml(line)}</span>`;
+    if (line.startsWith('@@')) return `<span class="d-hunk">${escHtml(line)}</span>`;
+    return `<span class="d-ctx">${escHtml(line)}</span>`;
+  }).join('\n');
+}
+function renderGitStatus(text) {
+  if (!text) return '<span class="d-ctx">Not a git repository</span>';
+  return text.split('\n').map(line => {
+    if (line.startsWith('##')) return `<span class="gs-branch">${escHtml(line)}</span>`;
+    const xy = line.slice(0,2);
+    let cls = 'd-ctx';
+    if (xy.includes('M')) cls = 'gs-modified';
+    else if (xy.includes('A')) cls = 'gs-added';
+    else if (xy.includes('D')) cls = 'gs-deleted';
+    else if (xy === '??') cls = 'gs-untracked';
+    return `<span class="${cls}">${escHtml(line)}</span>`;
+  }).join('\n');
+}
+
+// ── Inline diff toggle on write_file cards ────────────────────────────────
+async function toggleInlineDiff(card, action) {
+  const pre  = card.querySelector('.inline-diff');
+  const btn  = card.querySelector('.sm.diff-btn');
+  const open = pre.style.display !== 'none';
+
+  if (open) { pre.style.display = 'none'; btn.textContent = '▶ Diff'; return; }
+
+  pre.style.display = 'block';
+  btn.textContent = '▼ Diff';
+
+  if (pre.dataset.loaded) return;
+  pre.dataset.loaded = '1';
+  pre.textContent = 'Loading…';
+
+  try {
+    const resp = await apiCall('GET', `/file?path=${encodeURIComponent(action.input)}`);
+    const current  = resp.exists ? (resp.content || '') : null;
+    const proposed = action.content || '';
+    if (current === null) {
+      pre.innerHTML = `<span class="d-new">New file\n</span>` + renderDiffLines(computeDiff('', proposed));
+    } else {
+      pre.innerHTML = renderDiffLines(computeDiff(current, proposed));
+    }
+  } catch (err) {
+    pre.textContent = 'Error: ' + err.message;
+  }
+}
+
+// ── Pending rendering ─────────────────────────────────────────────────────
+let _pendingCount = 0;
+
+function renderPendingList(actions) {
+  const c = document.getElementById('pending-list');
+  const badge = document.getElementById('pending-badge');
+  if (!actions || actions.length === 0) {
+    c.innerHTML = '<div class="empty-state">No pending actions</div>';
+    badge.style.display = 'none'; _pendingCount = 0; return;
+  }
+  _pendingCount = actions.length;
+  badge.textContent = _pendingCount; badge.style.display = 'inline';
+  c.innerHTML = '';
+  actions.forEach(e => renderCard(c, e));
+}
+
+function renderCard(container, entry) {
+  const action   = entry.action || entry;
+  const id       = entry.id;
+  const decision = decideAction(action);
+  const snippet  = String(action.input || '').slice(0, 200);
+  const reason   = action.reason || '';
+
+  const card = document.createElement('div');
+  card.className = `action-card c-${decision}`;
+  card.id = `card-${id}`;
+
+  let html =
+    `<div class="card-type"><span class="card-dot"></span>${decisionIcon(decision)} ${escHtml(action.type || 'unknown')}</div>` +
+    `<div class="card-input">${escHtml(snippet)}</div>` +
+    (reason ? `<div class="card-reason">Reason: ${escHtml(reason)}</div>` : '');
+
+  if (action.type === 'write_file' && action.content !== undefined) {
+    html += `<div class="diff-toggle-row"><button class="sm diff-btn">▶ Diff</button></div><pre class="inline-diff"></pre>`;
+  }
+  if (action.type === 'git_commit') {
+    html += `<div class="card-note">⚡ Will commit all staged changes</div>`;
+  }
+  if (decision === 'review') {
+    html += `<div class="card-actions"><button class="approve-btn">✓ Approve</button><button class="deny-btn">✗ Deny</button></div>`;
+  }
+
+  card.innerHTML = html;
+
+  const diffBtn = card.querySelector('.diff-btn');
+  if (diffBtn) diffBtn.addEventListener('click', () => toggleInlineDiff(card, action));
+
+  const appBtn = card.querySelector('.approve-btn');
+  const denBtn = card.querySelector('.deny-btn');
+  if (appBtn) appBtn.addEventListener('click', () => doApprove(id, true));
+  if (denBtn) denBtn.addEventListener('click', () => doApprove(id, false));
+
+  container.appendChild(card);
+}
+
+async function doApprove(id, approve) {
+  const card = document.getElementById(`card-${id}`);
+  const btns = card.querySelectorAll('button.approve-btn, button.deny-btn');
+  btns.forEach(b => { b.disabled = true; b.textContent = '…'; });
+
+  try {
+    const data = await apiCall('POST', '/approve', { id, approve });
+    const status = data.status;
+    const chip = document.createElement('div');
+    chip.className = `outcome-chip ${status}`;
+    chip.textContent = status === 'approved' ? '✓ Approved' : status === 'rejected' ? '✗ Rejected' : '⚠ Failed';
+    card.querySelector('.card-actions').replaceWith(chip);
+    card.className = `action-card c-${status === 'approved' ? 'approved' : 'denied'}`;
+
+    const typeEl = card.querySelector('.card-type');
+    const actionType = typeEl ? typeEl.textContent.replace(/^[^\s]+ /, '').trim() : '?';
+    const inputEl = card.querySelector('.card-input');
+    addLog(actionType, inputEl ? inputEl.textContent : '', status);
+
+    _pendingCount = Math.max(0, _pendingCount - 1);
+    const badge = document.getElementById('pending-badge');
+    badge.style.display = _pendingCount === 0 ? 'none' : 'inline';
+    if (_pendingCount > 0) badge.textContent = _pendingCount;
+
+    // Refresh repo view after a commit or write
+    setTimeout(loadRepo, 600);
+  } catch (err) {
+    showToast(err.message);
+    btns.forEach((b, i) => { b.disabled = false; b.textContent = i===0 ? '✓ Approve' : '✗ Deny'; });
+  }
+}
+
+async function loadPending() {
+  try {
+    const data = await apiCall('GET', '/pending');
+    setStatus('live');
+    renderPendingList(data.pending_actions || []);
+  } catch (err) {
+    setStatus('error');
+    showToast('Failed to load pending: ' + err.message);
+  }
+}
+
+// ── Repository section ────────────────────────────────────────────────────
+async function loadRepo() {
+  try {
+    const data = await apiCall('GET', '/repo');
+    setStatus('live');
+
+    // Modified files chips
+    const filesEl = document.getElementById('repo-files');
+    if (data.modified_files && data.modified_files.length > 0) {
+      filesEl.innerHTML = data.modified_files.map(f => `<span class="file-chip">${escHtml(f)}</span>`).join('');
+    } else {
+      filesEl.innerHTML = '<span class="empty-state" style="padding:0">No modified files</span>';
+    }
+
+    // Status
+    document.getElementById('repo-status').innerHTML = renderGitStatus(data.status || '');
+
+    // Diff
+    document.getElementById('repo-diff').innerHTML = renderGitDiff(data.diff || '');
+    const diffBadge = document.getElementById('diff-badge');
+    if (data.diff_file_count > 0) {
+      diffBadge.textContent = data.diff_file_count;
+      diffBadge.style.display = 'inline';
+    } else {
+      diffBadge.style.display = 'none';
+    }
+  } catch (err) {
+    setStatus('error');
+    document.getElementById('repo-status').textContent = 'Error: ' + err.message;
+  }
+}
+
+// ── Send prompt ───────────────────────────────────────────────────────────
+async function sendPrompt() {
+  const textarea = document.getElementById('prompt');
+  const prompt = textarea.value.trim();
+  if (!prompt) return;
+
+  const btn     = document.getElementById('send-btn');
+  const spinner = document.getElementById('spinner');
+  const box     = document.getElementById('response-box');
+  const pre     = document.getElementById('response-text');
+
+  btn.disabled = true; spinner.style.display = 'block'; box.style.display = 'none';
+
+  try {
+    const data = await apiCall('POST', '/task', { prompt });
+    setStatus('live');
+    pre.textContent = data.response || '(no response)';
+    box.style.display = 'block';
+    textarea.value = '';
+
+    const pending = data.pending_actions || [];
+    if (pending.length > 0) await loadPending();
+
+    if (pending.length === 0) {
+      addLog('task', prompt.slice(0,40), 'allow');
+    } else {
+      pending.forEach(e => {
+        const a = e.action || e;
+        addLog(a.type || 'unknown', String(a.input || ''), decideAction(a));
+      });
+    }
+
+    // Refresh repo after any task (git ops may have run)
+    setTimeout(loadRepo, 400);
+  } catch (err) {
+    setStatus('error');
+    showToast(err.message);
+  } finally {
+    btn.disabled = false; spinner.style.display = 'none';
+  }
+}
+
+// Enter = submit, Shift+Enter = newline
+document.getElementById('prompt').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+});
+
+// ── Polling ────────────────────────────────────────────────────────────────
+let _pollTimer;
+function startPolling() {
+  loadPending(); loadRepo();
+  _pollTimer = setInterval(() => { if (!document.hidden) { loadPending(); loadRepo(); } }, 8000);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearInterval(_pollTimer);
+  else startPolling();
+});
+startPolling();
+</script>
+</body>
+</html>

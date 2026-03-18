@@ -18,22 +18,32 @@ SYSTEM_PROMPT = (
     '  "thought": "your step-by-step reasoning",\n'
     '  "actions": [\n'
     '    {\n'
-    '      "type": "read_file | write_file | shell | none",\n'
-    '      "input": "file path or shell command",\n'
+    '      "type": "<see action types below>",\n'
+    '      "input": "file path, shell command, git path, or commit message",\n'
     '      "content": "file content — write_file ONLY, omit for all other types",\n'
     '      "reason": "why this action is needed"\n'
     '    }\n'
     "  ],\n"
     '  "final_answer": "set ONLY when all actions have type none — your complete answer to the user"\n'
     "}\n\n"
+    "Action types:\n"
+    "  read_file   — input: file path. Returns file contents.\n"
+    "  write_file  — input: file path, content: complete new file content. Requires human approval.\n"
+    "  shell       — input: shell command. Dangerous commands are blocked.\n"
+    "  git_status  — input: empty. Returns working tree status.\n"
+    "  git_diff    — input: optional file path for scoped diff, or empty for full diff.\n"
+    "  git_add     — input: file path to stage.\n"
+    "  git_commit  — input: commit message. Requires human approval.\n"
+    "  none        — use when task is complete. Set final_answer.\n\n"
     "Workflow:\n"
     "1. To gather information or take action: list the actions you need. Leave final_answer empty or omit it.\n"
     "2. The server executes your actions and returns results in the next message.\n"
     "3. When you have everything you need: set actions to "
     '[{"type":"none","input":"","reason":"task complete"}] and write your full final_answer.\n\n'
     "Rules:\n"
-    "- Valid types: read_file, write_file, shell, none.\n"
-    "- write_file requires a \"content\" field with the complete file content.\n"
+    "- git push is NOT available and will never be allowed. Do not propose it.\n"
+    "- write_file requires a \"content\" field with the COMPLETE file content.\n"
+    "- Always read a file before modifying it so you have the full current content.\n"
     "- You may propose multiple actions per round.\n"
     "- Do not include any text outside the JSON object. Your entire response must be valid JSON."
 )
@@ -60,7 +70,8 @@ class ClaudeSession:
         async with self._lock:
             return await self._run_claude(["--system-prompt", SYSTEM_PROMPT], prompt)
 
-    async def send_with_tools(self, prompt: str) -> str:
+    async def send_with_tools(self, prompt: str) -> dict:
+        """Run the tool loop. Returns {"answer": str, "pending": list[dict]}."""
         async with self._lock:
             try:
                 return await asyncio.wait_for(
@@ -103,9 +114,10 @@ class ClaudeSession:
 
         return stdout.decode(errors="replace").strip()
 
-    async def _tool_loop(self, prompt: str) -> str:
+    async def _tool_loop(self, prompt: str) -> dict:
+        """Run the agentic tool loop. Returns {"answer": str, "pending": list[dict]}."""
         response = await self._run_claude(
-            ["--system-prompt", SYSTEM_PROMPT, "--allowedTools", ""], prompt
+            ["--system-prompt", SYSTEM_PROMPT, "--allowedTools", "", "--dangerously-skip-permissions"], prompt
         )
 
         for round_num in range(MAX_TOOL_ROUNDS):
@@ -114,7 +126,7 @@ class ClaudeSession:
             if parsed is None:
                 middleware.log_round(prompt, round_num, None, response, is_final=True)
                 logger.warning("Failed to parse response on round %d, returning raw", round_num)
-                return response
+                return {"answer": response, "pending": []}
 
             actions = middleware.validate_actions(parsed.get("actions", []))
             is_done = all(a["type"] == "none" for a in actions)
@@ -122,12 +134,29 @@ class ClaudeSession:
 
             if is_done:
                 final_answer = parsed.get("final_answer", "")
-                return final_answer.strip() if isinstance(final_answer, str) and final_answer.strip() else response
+                answer = final_answer.strip() if isinstance(final_answer, str) and final_answer.strip() else response
+                return {"answer": answer, "pending": []}
 
             logger.info("Round %d: executing %d action(s)", round_num + 1, len(actions))
             results = await execute_actions(actions)
+
+            review_results = [r for r in results if r.get("decision") == "review"]
+            if review_results:
+                pending = [
+                    {"id": r["result"]["id"], "action": r["action"]}
+                    for r in review_results
+                ]
+                logger.info(
+                    "Round %d: %d action(s) require review — stopping loop",
+                    round_num + 1, len(pending),
+                )
+                return {
+                    "answer": "One or more actions require review before execution.",
+                    "pending": pending,
+                }
+
             results_text = format_results_for_claude(results)
-            response = await self._run_claude(["--continue", "--allowedTools", ""], results_text)
+            response = await self._run_claude(["--continue", "--allowedTools", "", "--dangerously-skip-permissions"], results_text)
 
         logger.warning("Tool loop exhausted after %d rounds", MAX_TOOL_ROUNDS)
-        return "I was unable to complete the task within the allowed number of steps."
+        return {"answer": "I was unable to complete the task within the allowed number of steps.", "pending": []}
