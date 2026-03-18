@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import memory_store
 import middleware
 import pending_store
 from claude_session import ClaudeSession
@@ -38,6 +39,7 @@ async def root():
 
 class TaskRequest(BaseModel):
     prompt: str
+    agent_id: str = "default"
 
 
 class ApproveRequest(BaseModel):
@@ -45,21 +47,40 @@ class ApproveRequest(BaseModel):
     approve: bool
 
 
+class ResetMemoryRequest(BaseModel):
+    agent_id: str
+
+
 @app.post("/task")
 async def run_task(request: TaskRequest):
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
+    agent_id = request.agent_id.strip() or "default"
+    enriched_prompt = memory_store.build_context_prompt(agent_id, request.prompt)
+
     try:
-        result = await session.send_with_tools(request.prompt)
-        return {
-            "response": result["answer"],
-            "pending_actions": result["pending"],
-        }
+        result = await session.send_with_tools(enriched_prompt)
     except RuntimeError as exc:
         raise HTTPException(status_code=504, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Session error: {exc}")
+
+    memory_store.append_and_save(agent_id, request.prompt, result["answer"])
+
+    return {
+        "response": result["answer"],
+        "pending_actions": result["pending"],
+    }
+
+
+@app.post("/reset_memory")
+async def reset_memory(request: ResetMemoryRequest):
+    agent_id = request.agent_id.strip()
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id cannot be empty")
+    memory_store.reset(agent_id)
+    return {"agent_id": agent_id, "status": "reset"}
 
 
 @app.get("/pending")
