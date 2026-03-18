@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -58,12 +59,19 @@ async def run_task(request: TaskRequest):
     agent_id = request.agent_id.strip() or "default"
 
     async def event_stream():
+        t0 = time.monotonic()
+        event_count = 0
+        logger.info("Request | agent=%s prompt=%r", agent_id, request.prompt[:60])
         try:
             async for event in cs.stream_task(request.prompt, agent_id):
+                event_count += 1
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             logger.error("stream_task error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        finally:
+            elapsed = round((time.monotonic() - t0) * 1000)
+            logger.info("Request done | agent=%s events=%d elapsed_ms=%d", agent_id, event_count, elapsed)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

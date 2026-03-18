@@ -55,15 +55,18 @@
     #feed-list { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
     .feed-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px 0; }
     .feed-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; border-left-width: 3px; }
-    .feed-item.tool  { border-left-color: var(--accent); }
-    .feed-item.text  { border-left-color: var(--muted); }
-    .feed-item.done  { border-left-color: var(--green); }
-    .feed-item.error { border-left-color: var(--red); }
+    .feed-item.tool   { border-left-color: var(--accent); }
+    .feed-item.text   { border-left-color: var(--muted); }
+    .feed-item.done   { border-left-color: var(--green); }
+    .feed-item.error  { border-left-color: var(--red); }
+    .feed-item.status { border-left-color: var(--yellow); opacity: .75; }
     .feed-summary { font-size: 13px; color: var(--text); font-family: 'Menlo','Consolas',monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .feed-label { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
-    .feed-item.tool  .feed-label { color: var(--accent); }
-    .feed-item.done  .feed-label { color: var(--green); }
-    .feed-item.error .feed-label { color: var(--red); }
+    .feed-label { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
+    .feed-item.tool   .feed-label { color: var(--accent); }
+    .feed-item.done   .feed-label { color: var(--green); }
+    .feed-item.error  .feed-label { color: var(--red); }
+    .feed-item.status .feed-label { color: var(--yellow); }
+    .feed-time { font-size: 10px; font-weight: 400; color: var(--muted); letter-spacing: 0; text-transform: none; margin-left: auto; }
 
     /* Repository */
     .files-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; min-height: 20px; }
@@ -163,13 +166,14 @@ function clearFeed() {
   _hasFeed = false;
 }
 
-function addFeedItem(type, label, summary) {
+function addFeedItem(type, label, summary, elapsed_ms) {
   const list = document.getElementById('feed-list');
   if (!_hasFeed) { list.innerHTML = ''; _hasFeed = true; }
   const el = document.createElement('div');
   el.className = 'feed-item ' + type;
+  const timeStr = elapsed_ms != null ? `<span class="feed-time">${(elapsed_ms / 1000).toFixed(1)}s</span>` : '';
   el.innerHTML =
-    `<div class="feed-label">${escHtml(label)}</div>` +
+    `<div class="feed-label">${escHtml(label)}${timeStr}</div>` +
     `<div class="feed-summary">${escHtml(summary)}</div>`;
   list.appendChild(el);
   list.scrollTop = list.scrollHeight;
@@ -242,8 +246,10 @@ async function sendPrompt() {
 }
 
 function handleEvent(event, pre, box) {
-  if (event.type === 'tool') {
-    addFeedItem('tool', event.name, event.summary);
+  if (event.type === 'status') {
+    addFeedItem('status', 'Init', event.message, event.elapsed_ms);
+  } else if (event.type === 'tool') {
+    addFeedItem('tool', event.name, event.summary, event.elapsed_ms);
   } else if (event.type === 'text') {
     addFeedItem('text', 'Thinking', event.content.slice(0, 120));
   } else if (event.type === 'done') {

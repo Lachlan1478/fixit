@@ -4,17 +4,27 @@ claude_session.py — Claude Code CLI streaming session.
 Spawns `claude --print --output-format stream-json --verbose --dangerously-skip-permissions`
 and yields simplified events for the phone UI. Uses --resume <session_id> to maintain
 multi-turn conversation history per agent_id natively via Claude Code.
+
+Logging
+-------
+Two structured JSONL logs are written to logs/:
+
+  events.jsonl  — one entry per raw event from Claude (detailed trace)
+  sessions.jsonl — one entry per completed task (summary: timing, tokens, cost, tools)
 """
 
 import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
 
 # Maps agent_id → Claude Code session_id for --resume
 _agent_sessions: dict[str, str] = {}
@@ -36,8 +46,33 @@ _TOOL_LABELS = {
 }
 
 
+# ── Logging helpers ───────────────────────────────────────────────────────────
+
+def _ensure_logs_dir() -> None:
+    os.makedirs(LOGS_DIR, exist_ok=True)
+
+
+def _write_jsonl(filename: str, entry: dict) -> None:
+    _ensure_logs_dir()
+    path = os.path.join(LOGS_DIR, filename)
+    try:
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.error("Failed to write log %s: %s", filename, e)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _now_ms() -> float:
+    return time.monotonic() * 1000
+
+
+# ── Tool summariser ───────────────────────────────────────────────────────────
+
 def _summarise_tool(name: str, inp: dict) -> str:
-    """Return a short human-readable summary of a tool call."""
     label = _TOOL_LABELS.get(name, name)
     if name in ("Write", "Edit", "MultiEdit", "Read"):
         path = inp.get("file_path") or inp.get("path") or ""
@@ -55,6 +90,8 @@ def _summarise_tool(name: str, inp: dict) -> str:
     return label
 
 
+# ── Main streaming function ───────────────────────────────────────────────────
+
 async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[dict]:
     """
     Run Claude Code non-interactively and yield UI-ready events:
@@ -67,6 +104,9 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
     Conversation history is maintained automatically via --resume <session_id>.
     """
     session_id = _agent_sessions.get(agent_id)
+    is_resume = session_id is not None
+    task_start_ms = _now_ms()
+    task_start_ts = _now_iso()
 
     cmd = [
         "claude", "--print",
@@ -77,8 +117,28 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
     if session_id:
         cmd += ["--resume", session_id]
 
-    logger.info("Spawning Claude: cwd=%s session=%s", WORKSPACE_ROOT, session_id)
+    logger.info(
+        "Task start | agent=%s session=%s resume=%s prompt=%r",
+        agent_id, session_id, is_resume, prompt[:80],
+    )
 
+    # ── Per-task accumulators ─────────────────────────────────────────────
+    tool_calls: list[dict] = []          # {name, summary, input, ts_ms}
+    text_blocks: list[str] = []
+    first_tool_ms: float | None = None
+    first_text_ms: float | None = None
+    system_init_ms: float | None = None   # when system event fired
+    raw_event_count = 0
+    result_text = ""
+    total_cost_usd: float | None = None
+    usage: dict = {}
+    num_turns: int | None = None
+    duration_api_ms: float | None = None
+
+    # Track last tool call timestamp to measure tool execution time
+    last_tool_call_ts: dict[str, float] = {}   # tool_use_id → ts_ms
+
+    # ── Spawn subprocess ──────────────────────────────────────────────────
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -88,15 +148,33 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
             cwd=WORKSPACE_ROOT,
         )
     except FileNotFoundError:
-        yield {"type": "error", "message": "claude CLI not found — is Claude Code installed?"}
+        err_event = {"type": "error", "message": "claude CLI not found — is Claude Code installed?"}
+        _write_jsonl("events.jsonl", {
+            "ts": task_start_ts, "agent_id": agent_id, "event": "spawn_failed",
+            "error": err_event["message"],
+        })
+        yield err_event
         return
+
+    spawn_ms = _now_ms() - task_start_ms
+    logger.info("Subprocess spawned in %.0f ms (PID %s)", spawn_ms, proc.pid)
+
+    _write_jsonl("events.jsonl", {
+        "ts": task_start_ts,
+        "agent_id": agent_id,
+        "event": "task_start",
+        "session_id": session_id,
+        "is_resume": is_resume,
+        "prompt_snippet": prompt[:120],
+        "prompt_len": len(prompt),
+        "spawn_ms": round(spawn_ms, 1),
+    })
 
     proc.stdin.write(prompt.encode())
     await proc.stdin.drain()
     proc.stdin.close()
 
-    result_text = ""
-
+    # ── Read stream ───────────────────────────────────────────────────────
     async for raw_line in proc.stdout:
         line = raw_line.decode(errors="replace").strip()
         if not line:
@@ -105,50 +183,228 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            _write_jsonl("events.jsonl", {
+                "ts": _now_iso(), "agent_id": agent_id,
+                "event": "parse_error", "raw": line[:200],
+            })
             continue
 
+        raw_event_count += 1
         event_type = event.get("type")
+        elapsed_ms = round(_now_ms() - task_start_ms, 1)
 
-        # Save session_id so follow-up prompts resume the same conversation
+        # Save session_id for future --resume
         if "session_id" in event and event["session_id"]:
-            _agent_sessions[agent_id] = event["session_id"]
+            new_sid = event["session_id"]
+            if new_sid != session_id:
+                _agent_sessions[agent_id] = new_sid
+                session_id = new_sid
 
-        if event_type == "assistant":
+        # ── system init ──────────────────────────────────────────────────
+        if event_type == "system":
+            model = event.get("model", "")
+            tools_available = len(event.get("tools", []))
+            system_init_ms = elapsed_ms
+            logger.info("Claude init | model=%s tools=%d", model, tools_available)
+            _write_jsonl("events.jsonl", {
+                "ts": _now_iso(), "agent_id": agent_id,
+                "event": "system_init", "model": model,
+                "tools_available": tools_available,
+                "elapsed_ms": elapsed_ms,
+            })
+            yield {
+                "type": "status",
+                "message": f"Ready ({model.replace('claude-', '')} · {tools_available} tools)",
+                "elapsed_ms": round(elapsed_ms),
+            }
+
+        # ── assistant turn ───────────────────────────────────────────────
+        elif event_type == "assistant":
             content = event.get("message", {}).get("content", [])
+            msg_usage = event.get("message", {}).get("usage", {})
+
             for block in content:
                 btype = block.get("type")
+
                 if btype == "tool_use":
                     name = block.get("name", "")
                     inp = block.get("input") or {}
+                    tool_use_id = block.get("id", "")
+                    summary = _summarise_tool(name, inp)
+
+                    if first_tool_ms is None:
+                        first_tool_ms = elapsed_ms
+
+                    tool_entry = {
+                        "name": name,
+                        "summary": summary,
+                        "input_snippet": str(inp)[:200],
+                        "tool_use_id": tool_use_id,
+                        "elapsed_ms": elapsed_ms,
+                    }
+                    tool_calls.append(tool_entry)
+                    last_tool_call_ts[tool_use_id] = _now_ms()
+
+                    logger.info("Tool call | %s | %s", name, summary)
+                    _write_jsonl("events.jsonl", {
+                        "ts": _now_iso(), "agent_id": agent_id,
+                        "event": "tool_call", **tool_entry,
+                    })
+
                     yield {
                         "type": "tool",
                         "name": name,
-                        "summary": _summarise_tool(name, inp),
+                        "summary": summary,
                         "input": inp,
+                        "elapsed_ms": round(elapsed_ms),
                     }
+
                 elif btype == "text":
                     text = block.get("text", "").strip()
                     if text:
+                        if first_text_ms is None:
+                            first_text_ms = elapsed_ms
+                        text_blocks.append(text)
+                        _write_jsonl("events.jsonl", {
+                            "ts": _now_iso(), "agent_id": agent_id,
+                            "event": "text_block",
+                            "snippet": text[:120],
+                            "length": len(text),
+                            "elapsed_ms": elapsed_ms,
+                        })
                         yield {"type": "text", "content": text}
 
+            # Log token usage from assistant turn if present
+            if msg_usage:
+                _write_jsonl("events.jsonl", {
+                    "ts": _now_iso(), "agent_id": agent_id,
+                    "event": "turn_usage", "usage": msg_usage,
+                    "elapsed_ms": elapsed_ms,
+                })
+
+        # ── user turn (tool results) ──────────────────────────────────────
+        elif event_type == "user":
+            content = event.get("message", {}).get("content", [])
+            for block in content:
+                if block.get("type") == "tool_result":
+                    tool_use_id = block.get("tool_use_id", "")
+                    is_error = block.get("is_error", False)
+                    result_content = block.get("content", "")
+                    result_snippet = str(result_content)[:120] if result_content else ""
+
+                    exec_ms = None
+                    if tool_use_id in last_tool_call_ts:
+                        exec_ms = round(_now_ms() - last_tool_call_ts.pop(tool_use_id), 1)
+
+                    logger.info(
+                        "Tool result | id=%s error=%s exec_ms=%s",
+                        tool_use_id[:8], is_error, exec_ms,
+                    )
+                    _write_jsonl("events.jsonl", {
+                        "ts": _now_iso(), "agent_id": agent_id,
+                        "event": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "is_error": is_error,
+                        "result_snippet": result_snippet,
+                        "exec_ms": exec_ms,
+                        "elapsed_ms": elapsed_ms,
+                    })
+
+        # ── rate limit ────────────────────────────────────────────────────
+        elif event_type == "rate_limit_event":
+            info = event.get("rate_limit_info", {})
+            logger.info(
+                "Rate limit | status=%s type=%s overage=%s",
+                info.get("status"), info.get("rateLimitType"), info.get("overageStatus"),
+            )
+            _write_jsonl("events.jsonl", {
+                "ts": _now_iso(), "agent_id": agent_id,
+                "event": "rate_limit", "info": info,
+                "elapsed_ms": elapsed_ms,
+            })
+
+        # ── final result ──────────────────────────────────────────────────
         elif event_type == "result":
             result_text = event.get("result", "")
-            if event.get("subtype") == "error" or event.get("is_error"):
+            total_cost_usd = event.get("total_cost_usd")
+            usage = event.get("usage", {})
+            num_turns = event.get("num_turns")
+            duration_api_ms = event.get("duration_api_ms")
+            is_error = event.get("subtype") == "error" or event.get("is_error", False)
+
+            if is_error:
                 yield {"type": "error", "message": result_text}
             else:
                 yield {"type": "done", "result": result_text}
 
+    # ── Post-stream ───────────────────────────────────────────────────────
     stderr_bytes = await proc.stderr.read()
-    if stderr_bytes:
-        logger.warning("Claude stderr: %s", stderr_bytes.decode(errors="replace").strip()[:500])
+    stderr_text = stderr_bytes.decode(errors="replace").strip() if stderr_bytes else ""
+    if stderr_text:
+        logger.warning("Claude stderr: %s", stderr_text[:500])
+        _write_jsonl("events.jsonl", {
+            "ts": _now_iso(), "agent_id": agent_id,
+            "event": "stderr", "text": stderr_text[:500],
+        })
 
     await proc.wait()
-    if proc.returncode != 0 and not result_text:
-        err = stderr_bytes.decode(errors="replace").strip() if stderr_bytes else "unknown error"
-        yield {"type": "error", "message": f"Claude exited with code {proc.returncode}: {err}"}
+    exit_code = proc.returncode
+    total_ms = round(_now_ms() - task_start_ms, 1)
+
+    # Handle unexpected exit
+    if exit_code != 0 and not result_text:
+        err_msg = f"Claude exited with code {exit_code}: {stderr_text[:200]}"
+        logger.error(err_msg)
+        yield {"type": "error", "message": err_msg}
+
+    # ── Write session summary ─────────────────────────────────────────────
+    session_summary = {
+        "ts": task_start_ts,
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "is_resume": is_resume,
+        "prompt_snippet": prompt[:120],
+        "prompt_len": len(prompt),
+        # Timing
+        "total_ms": total_ms,
+        "duration_api_ms": duration_api_ms,
+        "system_init_ms": system_init_ms,
+        "first_tool_ms": first_tool_ms,
+        "inference_ms": round(first_tool_ms - system_init_ms, 1) if first_tool_ms and system_init_ms else None,
+        "first_text_ms": first_text_ms,
+        # Tool calls
+        "tool_call_count": len(tool_calls),
+        "tools_used": [t["name"] for t in tool_calls],
+        "tool_calls": tool_calls,
+        # Output
+        "result_len": len(result_text),
+        "result_snippet": result_text[:120],
+        "text_block_count": len(text_blocks),
+        "num_turns": num_turns,
+        # Cost / tokens
+        "total_cost_usd": total_cost_usd,
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_read_tokens": usage.get("cache_read_input_tokens"),
+        "cache_creation_tokens": usage.get("cache_creation_input_tokens"),
+        # Process
+        "exit_code": exit_code,
+        "raw_event_count": raw_event_count,
+        "had_stderr": bool(stderr_text),
+    }
+    _write_jsonl("sessions.jsonl", session_summary)
+
+    logger.info(
+        "Task done | agent=%s total_ms=%.0f tools=%d turns=%s cost=$%.4f exit=%s",
+        agent_id, total_ms, len(tool_calls), num_turns,
+        total_cost_usd or 0, exit_code,
+    )
 
 
 def reset_session(agent_id: str) -> None:
     """Clear stored session_id so the next prompt starts a fresh conversation."""
     _agent_sessions.pop(agent_id, None)
     logger.info("Session reset for agent_id=%r", agent_id)
+    _write_jsonl("events.jsonl", {
+        "ts": _now_iso(), "agent_id": agent_id, "event": "session_reset",
+    })
