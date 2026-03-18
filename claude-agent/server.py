@@ -1,44 +1,38 @@
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-import memory_store
-import middleware
-import pending_store
-from claude_session import ClaudeSession
-from executor import WORKSPACE_ROOT, execute_approved_action
-from tools.browser import browser_init, browser_close
+import claude_session as cs
+
+WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 from tools.filesystem import read_file as _read_file
 from tools.git import git_diff as _git_diff, git_status as _git_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-session = ClaudeSession()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await session.start()
-    try:
-        await browser_init()
-    except Exception:
-        logger.warning("Browser failed to start — will retry lazily on first use")
-    try:
-        yield
-    finally:
-        await session.stop()
-        await browser_close()
+    yield
 
 
 app = FastAPI(lifespan=lifespan)
 
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+app.mount(
+    "/static",
+    StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")),
+    name="static",
+)
 
 
 @app.get("/")
@@ -51,36 +45,27 @@ class TaskRequest(BaseModel):
     agent_id: str = "default"
 
 
-class ApproveRequest(BaseModel):
-    id: str
-    approve: bool
-
-
 class ResetMemoryRequest(BaseModel):
     agent_id: str
 
 
 @app.post("/task")
 async def run_task(request: TaskRequest):
+    """Stream Claude's work as SSE. Each event is 'data: <json>\\n\\n'."""
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     agent_id = request.agent_id.strip() or "default"
-    enriched_prompt = memory_store.build_context_prompt(agent_id, request.prompt)
 
-    try:
-        result = await session.send_with_tools(enriched_prompt)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=504, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Session error: {exc}")
+    async def event_stream():
+        try:
+            async for event in cs.stream_task(request.prompt, agent_id):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            logger.error("stream_task error: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
-    memory_store.append_and_save(agent_id, request.prompt, result["answer"])
-
-    return {
-        "response": result["answer"],
-        "pending_actions": result["pending"],
-    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/reset_memory")
@@ -88,44 +73,8 @@ async def reset_memory(request: ResetMemoryRequest):
     agent_id = request.agent_id.strip()
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id cannot be empty")
-    memory_store.reset(agent_id)
+    cs.reset_session(agent_id)
     return {"agent_id": agent_id, "status": "reset"}
-
-
-@app.get("/pending")
-async def get_pending():
-    return {"pending_actions": pending_store.get_pending()}
-
-
-@app.post("/approve")
-async def approve_action(request: ApproveRequest):
-    entry = pending_store.get_by_id(request.id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"No pending action with id={request.id!r}")
-    if entry["status"] != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Action is already {entry['status']!r} — cannot change",
-        )
-
-    action = entry["action"]
-
-    if not request.approve:
-        pending_store.update_status(request.id, "rejected")
-        middleware.log_approval(request.id, action, "rejected", None)
-        return {"id": request.id, "status": "rejected"}
-
-    exec_result = await execute_approved_action(action)
-    status = "approved" if exec_result["error"] is None else "failed"
-    pending_store.update_status(request.id, status)
-    middleware.log_approval(request.id, action, status, exec_result)
-
-    return {
-        "id": request.id,
-        "status": status,
-        "result": exec_result.get("result"),
-        "error": exec_result.get("error"),
-    }
 
 
 @app.get("/repo")

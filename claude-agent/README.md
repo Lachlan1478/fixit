@@ -1,65 +1,65 @@
-# Claude Agent Server
+# Claude Agent
 
-A minimal HTTP server that keeps a Claude CLI session alive and forwards
-prompts to it over a persistent stdin/stdout pipe.
+A mobile-friendly web UI that lets you run Claude Code remotely — send prompts from your phone and watch every tool call stream live, exactly like using Claude Code in VS Code.
 
-## Architecture
+## How it works
+
+```
+Phone browser
+    │  POST /task (prompt)
+    ▼
+FastAPI server  ──▶  claude --print --output-format stream-json
+    │                    │
+    │   SSE events ◀─────┘  (Write, Bash, Read, Glob… streamed live)
+    ▼
+Live feed in UI
+```
+
+Claude Code runs with full autonomy in the workspace directory. Every tool call streams to the phone UI in real time. Conversation history is maintained across prompts via `--resume <session_id>`.
+
+## Structure
 
 ```
 claude-agent/
-  server.py          — FastAPI app, lifespan startup/shutdown
-  claude_session.py  — persistent subprocess manager
+  server.py          — FastAPI app (POST /task, GET /repo, GET /file, POST /reset_memory)
+  claude_session.py  — Spawns claude CLI, streams events, manages session_ids per agent
+  tools/
+    filesystem.py    — read_file, write_file
+    git.py           — git_status, git_diff, git_add, git_commit
+    shell.py         — run_shell
+    browser.py       — Playwright browser tools
+  static/
+    index.html       — Mobile UI (send prompt, live feed, repo view)
   requirements.txt
 ```
-
-**How it works**
-
-1. On startup the server spawns `claude` as a background subprocess.
-2. Each `POST /task` request writes the prompt to Claude's stdin and reads
-   stdout until 2 seconds of silence (= end of response).
-3. Requests are serialized with an `asyncio.Lock` — concurrent callers queue
-   up automatically.
-4. If Claude crashes it is restarted transparently before the next request.
 
 ## Prerequisites
 
 - Python 3.11+
-- [Claude CLI](https://docs.anthropic.com/claude/docs/claude-cli) installed and authenticated (`claude --version` should work)
+- Claude Code CLI installed and authenticated (`claude --version` should work)
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 ```
+
+No API key needed — uses your Claude Pro subscription via the `claude` CLI.
 
 ## Run
 
 ```bash
-uvicorn server:app --host 0.0.0.0 --port 8000
+uvicorn server:app --host 0.0.0.0 --port 8007 --app-dir claude-agent
 ```
 
-## Usage
+Open `http://localhost:8007` (or your Tailscale address) from any device.
 
-### POST /task
+## API
 
-```bash
-curl -X POST http://localhost:8000/task \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "What is 2 + 2?"}'
-```
-
-```json
-{"response": "4"}
-```
-
-## Tuning
-
-| Setting | File | Default | When to change |
-|---|---|---|---|
-| `SILENCE_TIMEOUT` | `claude_session.py` | `2.0 s` | Raise if long responses get cut off |
-| `timeout=120` | `claude_session.py` | `120 s` | Raise for very long tasks |
-
-## Notes
-
-- The server binds to `0.0.0.0` — reachable from any device on the same network.
-- Find your local IP with `ipconfig` (Windows) and call `http://<your-ip>:8000/task`.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/task` | POST `{prompt, agent_id}` | Run a prompt. Returns SSE stream of events. |
+| `/reset_memory` | POST `{agent_id}` | Clear conversation history for an agent. |
+| `/repo` | GET | Git status + diff for the workspace. |
+| `/file` | GET `?path=` | Read a file from the workspace. |
