@@ -21,6 +21,8 @@ import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
+import rate_limit as rl
+
 logger = logging.getLogger(__name__)
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -333,7 +335,15 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
             is_error = event.get("subtype") == "error" or event.get("is_error", False)
 
             if is_error:
-                yield {"type": "error", "message": result_text}
+                if rl.is_rate_limit_message(result_text):
+                    reset_at = rl.extract_reset_time(result_text)
+                    yield {
+                        "type": "rate_limited",
+                        "reset_at": reset_at.isoformat(),
+                        "message": result_text,
+                    }
+                else:
+                    yield {"type": "error", "message": result_text}
             else:
                 yield {"type": "done", "result": result_text}
 
@@ -353,9 +363,17 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
 
     # Handle unexpected exit
     if exit_code != 0 and not result_text:
-        err_msg = f"Claude exited with code {exit_code}: {stderr_text[:200]}"
-        logger.error(err_msg)
-        yield {"type": "error", "message": err_msg}
+        if rl.is_rate_limit_message(stderr_text):
+            reset_at = rl.extract_reset_time(stderr_text)
+            yield {
+                "type": "rate_limited",
+                "reset_at": reset_at.isoformat(),
+                "message": stderr_text or "Claude usage limit reached",
+            }
+        else:
+            err_msg = f"Claude exited with code {exit_code}: {stderr_text[:200]}"
+            logger.error(err_msg)
+            yield {"type": "error", "message": err_msg}
 
     # ── Write session summary ─────────────────────────────────────────────
     session_summary = {
