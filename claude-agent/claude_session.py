@@ -12,6 +12,8 @@ import logging
 import os
 from collections.abc import AsyncIterator
 
+import rate_limit as rl
+
 logger = logging.getLogger(__name__)
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -134,18 +136,35 @@ async def stream_task(prompt: str, agent_id: str = "default") -> AsyncIterator[d
         elif event_type == "result":
             result_text = event.get("result", "")
             if event.get("subtype") == "error" or event.get("is_error"):
-                yield {"type": "error", "message": result_text}
+                if rl.is_rate_limit_message(result_text):
+                    reset_at = rl.extract_reset_time(result_text)
+                    yield {
+                        "type": "rate_limited",
+                        "reset_at": reset_at.isoformat(),
+                        "message": result_text,
+                    }
+                else:
+                    yield {"type": "error", "message": result_text}
             else:
                 yield {"type": "done", "result": result_text}
 
     stderr_bytes = await proc.stderr.read()
-    if stderr_bytes:
-        logger.warning("Claude stderr: %s", stderr_bytes.decode(errors="replace").strip()[:500])
+    stderr_text = stderr_bytes.decode(errors="replace").strip() if stderr_bytes else ""
+    if stderr_text:
+        logger.warning("Claude stderr: %s", stderr_text[:500])
 
     await proc.wait()
     if proc.returncode != 0 and not result_text:
-        err = stderr_bytes.decode(errors="replace").strip() if stderr_bytes else "unknown error"
-        yield {"type": "error", "message": f"Claude exited with code {proc.returncode}: {err}"}
+        if rl.is_rate_limit_message(stderr_text):
+            reset_at = rl.extract_reset_time(stderr_text)
+            yield {
+                "type": "rate_limited",
+                "reset_at": reset_at.isoformat(),
+                "message": stderr_text or "Claude usage limit reached",
+            }
+        else:
+            err = stderr_text or "unknown error"
+            yield {"type": "error", "message": f"Claude exited with code {proc.returncode}: {err}"}
 
 
 def reset_session(agent_id: str) -> None:

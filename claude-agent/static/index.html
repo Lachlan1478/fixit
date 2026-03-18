@@ -28,6 +28,7 @@
     .status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .status-dot.working { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); animation: pulse 1s ease-in-out infinite; }
     .status-dot.error { background: var(--red); }
+    .status-dot.limited { background: var(--yellow); }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
     .status-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 
@@ -86,10 +87,21 @@
     .d-ctx  { color: var(--muted); }
 
     #toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: var(--red); color: #fff; padding: 10px 18px; border-radius: var(--r); font-size: 13px; z-index: 100; display: none; max-width: 440px; text-align: center; }
+
+    /* Rate-limit banner */
+    #rate-limit-banner { display: none; background: #2a1f00; border: 1px solid var(--yellow); border-radius: var(--r); padding: 14px 16px; margin: 12px 16px 0; }
+    #rate-limit-banner .rl-title { font-size: 13px; font-weight: 700; color: var(--yellow); margin-bottom: 4px; }
+    #rate-limit-banner .rl-body  { font-size: 12px; color: #d4a700; line-height: 1.5; }
+    #rate-limit-banner .rl-countdown { font-size: 22px; font-weight: 700; color: var(--yellow); font-family: 'Menlo','Consolas',monospace; margin: 8px 0 4px; letter-spacing: .04em; }
   </style>
 </head>
 <body>
 <div id="toast"></div>
+<div id="rate-limit-banner">
+  <div class="rl-title">⏳ Claude Usage Limit Reached</div>
+  <div class="rl-countdown" id="rl-countdown">—</div>
+  <div class="rl-body" id="rl-body">Waiting for limit to reset… will resume automatically.</div>
+</div>
 <div class="container">
 
   <header>
@@ -140,11 +152,82 @@
 
 </div>
 <script>
+// ── Rate-limit state ───────────────────────────────────────────────────────
+let _rateLimitResetAt = null;   // Date object
+let _pendingPrompt    = null;   // prompt queued while rate-limited
+let _countdownTimer   = null;
+let _pollTimer        = null;
+
+function showRateLimitBanner(resetAtIso, message) {
+  _rateLimitResetAt = resetAtIso ? new Date(resetAtIso) : null;
+  document.getElementById('send-btn').disabled = true;
+  const banner = document.getElementById('rate-limit-banner');
+  const body   = document.getElementById('rl-body');
+  banner.style.display = 'block';
+  if (_rateLimitResetAt) {
+    body.textContent = `Resets at ${_rateLimitResetAt.toLocaleTimeString()} — will resume automatically.`;
+  } else {
+    body.textContent = message || 'Waiting for limit to reset…';
+  }
+  _startCountdown();
+  _startRateLimitPolling();
+}
+
+function hideRateLimitBanner() {
+  document.getElementById('send-btn').disabled = false;
+  document.getElementById('rate-limit-banner').style.display = 'none';
+  _rateLimitResetAt = null;
+  clearInterval(_countdownTimer);
+  clearInterval(_pollTimer);
+  _countdownTimer = null;
+  _pollTimer = null;
+}
+
+function _startCountdown() {
+  clearInterval(_countdownTimer);
+  _countdownTimer = setInterval(() => {
+    const el = document.getElementById('rl-countdown');
+    if (!_rateLimitResetAt) { el.textContent = '—'; return; }
+    const diff = Math.max(0, Math.floor((_rateLimitResetAt - Date.now()) / 1000));
+    const h = Math.floor(diff / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    const s = diff % 60;
+    el.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    if (diff === 0) clearInterval(_countdownTimer);
+  }, 1000);
+}
+
+function _startRateLimitPolling() {
+  clearInterval(_pollTimer);
+  _pollTimer = setInterval(async () => {
+    try {
+      const data = await fetch('/rate_limit_status').then(r => r.json());
+      if (!data.is_limited) {
+        clearInterval(_pollTimer);
+        hideRateLimitBanner();
+        setStatus('live');
+        addFeedItem('done', 'Rate Limit', 'Usage limit reset — ready to continue');
+        // Auto-resubmit if there was a pending prompt
+        if (_pendingPrompt) {
+          const prompt = _pendingPrompt;
+          _pendingPrompt = null;
+          document.getElementById('prompt').value = prompt;
+          addFeedItem('text', 'Auto-resume', 'Resubmitting queued prompt…');
+          setTimeout(sendPrompt, 1000);
+        }
+      }
+    } catch (_) { /* ignore transient errors */ }
+  }, 10000); // poll every 10 s
+}
+
 // ── Status ────────────────────────────────────────────────────────────────
 function setStatus(state) {
   document.getElementById('status-dot').className = 'status-dot ' + state;
   document.getElementById('status-text').textContent =
-    state === 'live' ? 'live' : state === 'working' ? 'working…' : state === 'error' ? 'error' : 'connecting…';
+    state === 'live'    ? 'live'      :
+    state === 'working' ? 'working…'  :
+    state === 'error'   ? 'error'     :
+    state === 'limited' ? 'rate limited' : 'connecting…';
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────
@@ -195,6 +278,7 @@ async function sendPrompt() {
   spinner.style.display = 'block';
   box.style.display = 'none';
   setStatus('working');
+  _pendingPrompt = prompt;   // save in case we hit a rate limit
   textarea.value = '';
 
   try {
@@ -227,7 +311,11 @@ async function sendPrompt() {
       }
     }
 
-    setStatus('live');
+    // Only mark live if we're not currently rate-limited
+    if (!_rateLimitResetAt) {
+      setStatus('live');
+      _pendingPrompt = null;
+    }
     // Refresh repo after Claude finishes
     setTimeout(loadRepo, 800);
 
@@ -253,6 +341,10 @@ function handleEvent(event, pre, box) {
   } else if (event.type === 'error') {
     addFeedItem('error', 'Error', event.message);
     showToast(event.message);
+  } else if (event.type === 'rate_limited') {
+    setStatus('limited');
+    addFeedItem('error', 'Rate Limited', `Usage limit hit — resumes at ${event.reset_at ? new Date(event.reset_at).toLocaleTimeString() : 'unknown'}`);
+    showRateLimitBanner(event.reset_at, event.message);
   }
 }
 
@@ -325,6 +417,15 @@ document.getElementById('prompt').addEventListener('keydown', e => {
 // Initial load
 loadRepo().then(() => setStatus('live'));
 setInterval(() => { if (!document.hidden) loadRepo(); }, 15000);
+
+// Restore rate-limit banner if server is still limited (e.g. after page refresh)
+fetch('/rate_limit_status').then(r => r.json()).then(data => {
+  if (data.is_limited) {
+    setStatus('limited');
+    showRateLimitBanner(data.reset_at, null);
+    addFeedItem('error', 'Rate Limited', 'Usage limit is still active — waiting for reset…');
+  }
+}).catch(() => {});
 </script>
 </body>
 </html>

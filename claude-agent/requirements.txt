@@ -3,3 +3,4 @@ uvicorn[standard]
 playwright
 anthropic
 python-dotenv
+aiohttp

@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -12,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import claude_session as cs
+import rate_limit as rl
+from notifications import send_notification
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 from tools.filesystem import read_file as _read_file
@@ -60,12 +64,39 @@ async def run_task(request: TaskRequest):
     async def event_stream():
         try:
             async for event in cs.stream_task(request.prompt, agent_id):
+                if event.get("type") == "rate_limited":
+                    reset_at_str = event.get("reset_at")
+                    try:
+                        reset_at = datetime.fromisoformat(reset_at_str)
+                    except Exception:
+                        reset_at = datetime.now(timezone.utc)
+
+                    state = rl.get_state()
+                    state.set_limited(reset_at)
+
+                    # Launch background watcher (idempotent — skips if already running)
+                    if state._watch_task is None or state._watch_task.done():
+                        state._watch_task = asyncio.create_task(rl.watch_and_clear(reset_at))
+
+                    # Notify immediately that the limit was hit
+                    asyncio.create_task(send_notification(
+                        f"⚠️ Claude usage limit hit!\n"
+                        f"Will automatically resume at: {reset_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
+                        f"You'll be notified when the limit resets."
+                    ))
+
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             logger.error("stream_task error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/rate_limit_status")
+async def rate_limit_status():
+    """Return current rate-limit state so the UI can show a countdown."""
+    return rl.get_state().to_dict()
 
 
 @app.post("/reset_memory")
