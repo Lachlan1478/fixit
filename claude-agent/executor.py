@@ -6,6 +6,7 @@ import middleware
 import pending_store
 from control import decide_action
 from tools import execute_tool
+from tools.browser import check_url
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,28 @@ async def _dispatch_action(action: dict) -> dict:
 
         elif action_type == "git_commit":
             result = await execute_tool("git_commit", {"workspace": WORKSPACE_ROOT, "message": input_val})
+            return {"action": action, "result": result, "error": None, "decision": "allow"}
+
+        elif action_type == "browser_navigate":
+            check_url(input_val)
+            result = await execute_tool("browser_navigate", {"url": input_val})
+            return {"action": action, "result": result, "error": None, "decision": "allow"}
+
+        elif action_type == "browser_click":
+            result = await execute_tool("browser_click", {"selector": input_val})
+            return {"action": action, "result": result, "error": None, "decision": "allow"}
+
+        elif action_type == "browser_fill":
+            text = action.get("content", "")
+            result = await execute_tool("browser_fill", {"selector": input_val, "text": text})
+            return {"action": action, "result": result, "error": None, "decision": "allow"}
+
+        elif action_type == "browser_extract_text":
+            result = await execute_tool("browser_extract_text", {})
+            return {"action": action, "result": result, "error": None, "decision": "allow"}
+
+        elif action_type == "browser_screenshot":
+            result = await execute_tool("browser_screenshot", {"filename_hint": input_val})
             return {"action": action, "result": result, "error": None, "decision": "allow"}
 
         else:

@@ -20,7 +20,7 @@ SYSTEM_PROMPT = (
     '    {\n'
     '      "type": "<see action types below>",\n'
     '      "input": "file path, shell command, git path, or commit message",\n'
-    '      "content": "file content — write_file ONLY, omit for all other types",\n'
+    '      "content": "file content (write_file) or text to type (browser_fill) — omit for other types",\n'
     '      "reason": "why this action is needed"\n'
     '    }\n'
     "  ],\n"
@@ -34,6 +34,11 @@ SYSTEM_PROMPT = (
     "  git_diff    — input: optional file path for scoped diff, or empty for full diff.\n"
     "  git_add     — input: file path to stage.\n"
     "  git_commit  — input: commit message. Requires human approval.\n"
+    "  browser_navigate     — input: URL (http/https only). Navigate browser. Auto-allowed.\n"
+    "  browser_click        — input: CSS selector. Click element. Requires approval.\n"
+    "  browser_fill         — input: CSS selector, content: text to type. Requires approval.\n"
+    "  browser_extract_text — input: empty. Returns visible page text. Auto-allowed.\n"
+    "  browser_screenshot   — input: optional filename hint. Saves PNG, returns path. Auto-allowed.\n"
     "  none        — use when task is complete. Set final_answer.\n\n"
     "Workflow:\n"
     "1. To gather information or take action: list the actions you need. Leave final_answer empty or omit it.\n"
@@ -45,6 +50,9 @@ SYSTEM_PROMPT = (
     "- write_file requires a \"content\" field with the COMPLETE file content.\n"
     "- Always read a file before modifying it so you have the full current content.\n"
     "- You may propose multiple actions per round.\n"
+    "- browser_fill requires a \"content\" field with the text to type.\n"
+    "- Browser state persists across actions in the same task (navigate first, then interact).\n"
+    "- file:// URLs and private/loopback addresses are blocked.\n"
     "- Do not include any text outside the JSON object. Your entire response must be valid JSON."
 )
 

@@ -12,10 +12,12 @@ import middleware
 import pending_store
 from claude_session import ClaudeSession
 from executor import WORKSPACE_ROOT, execute_approved_action
+from tools.browser import browser_init, browser_close
 from tools.filesystem import read_file as _read_file
 from tools.git import git_diff as _git_diff, git_status as _git_status
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 session = ClaudeSession()
 
@@ -23,8 +25,15 @@ session = ClaudeSession()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await session.start()
-    yield
-    await session.stop()
+    try:
+        await browser_init()
+    except Exception:
+        logger.warning("Browser failed to start — will retry lazily on first use")
+    try:
+        yield
+    finally:
+        await session.stop()
+        await browser_close()
 
 
 app = FastAPI(lifespan=lifespan)

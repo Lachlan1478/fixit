@@ -47,4 +47,10 @@ def decide_action(action: dict) -> str:
                 return "allow"
         return "review"
 
+    if action_type == "browser_navigate":   return "allow"
+    if action_type == "browser_click":      return "review"
+    if action_type == "browser_fill":       return "review"
+    if action_type == "browser_extract_text": return "allow"
+    if action_type == "browser_screenshot": return "allow"
+
     return "review"

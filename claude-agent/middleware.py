@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-VALID_ACTION_TYPES = {"read_file", "write_file", "shell", "none", "git_status", "git_diff", "git_add", "git_commit"}
+VALID_ACTION_TYPES = {
+    "read_file", "write_file", "shell", "none",
+    "git_status", "git_diff", "git_add", "git_commit",
+    "browser_navigate", "browser_click", "browser_fill",
+    "browser_extract_text", "browser_screenshot",
+}
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 _LOG_FILE = os.path.join(_LOGS_DIR, "actions.log")
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
@@ -76,7 +81,7 @@ def _validate_actions(actions) -> list[dict]:
             "type": action_type,
             "input": str(entry.get("input", "")),
             "reason": str(entry.get("reason", "")),
-            # preserve content for write_file
+            # preserve content for write_file and browser_fill
             **({"content": entry["content"]} if "content" in entry else {}),
         })
     return validated or [{"type": "none", "input": "", "reason": "no valid actions found"}]
