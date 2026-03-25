@@ -21,6 +21,7 @@ import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
+import analytics
 import rate_limit as rl
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,46 @@ _agent_sessions: dict[str, str] = {}
 
 # Conversation history per agent_id
 _conversation_history: dict[str, list[dict]] = {}
+
+# Image extensions that trigger an inline image event in the UI
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+
+# System prompt injected into every Claude session so it can exploit the UI features
+_SYSTEM_PROMPT = """\
+You are running inside **Claude Agent** — a mobile-first developer interface. \
+Images you produce appear inline in the user's feed as tappable thumbnails.
+
+## Screenshot reflex — do this automatically, no explanation needed
+
+Whenever the user says anything like "show me", "screenshot", "what does X look like", \
+"preview", "visualise", "capture", or asks about the appearance of a URL or app — \
+immediately run:
+
+    python claude-agent/screenshot.py <url> <short_name>
+
+That's it. Don't explain what you're doing, don't ask for confirmation, just run the \
+command. The image will appear in the feed automatically.
+
+Examples:
+- "show me google.com"  →  python claude-agent/screenshot.py https://google.com google
+- "screenshot the app"  →  python claude-agent/screenshot.py http://localhost:3000 app
+- "what does the habit tracker look like"  →  python claude-agent/screenshot.py http://localhost:8007/static/habits.html habits
+
+If playwright isn't installed, install it first:
+    pip install playwright && python -m playwright install chromium
+
+## Other UI capabilities
+
+- **HTML preview** — files written to claude-agent/static/ auto-load in a live iframe.
+- **Any image file** you write (.png .jpg .gif .svg .webp) appears inline in the feed.
+- **TodoWrite** renders as a live checklist — use it to show your plan before multi-step tasks.
+- **Bash output** is expandable — users tap to see full stdout/stderr.
+
+## Workspace
+
+- Root is the parent of claude-agent/.
+- Use workspace-relative paths (e.g. claude-agent/static/screenshots/result.png).
+"""
 
 # Short name → full model ID
 _MODELS: dict[str, str] = {
@@ -131,6 +172,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         "--verbose",
         "--dangerously-skip-permissions",
         "--model", model_id,
+        "--system-prompt", _SYSTEM_PROMPT,
     ]
     if session_id:
         cmd += ["--resume", session_id]
@@ -155,6 +197,10 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
 
     # Track last tool call timestamp to measure tool execution time
     last_tool_call_ts: dict[str, float] = {}   # tool_use_id → ts_ms
+    # Track tool_use_id → tool name so results can be matched to calls
+    tool_id_to_name: dict[str, str] = {}        # tool_use_id → name
+    # Mirror of tool_calls enriched with exec_ms after result arrives
+    _tool_analytics: list[dict] = []            # for analytics.record_session()
 
     # ── Spawn subprocess ──────────────────────────────────────────────────
     try:
@@ -262,6 +308,17 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                     }
                     tool_calls.append(tool_entry)
                     last_tool_call_ts[tool_use_id] = _now_ms()
+                    tool_id_to_name[tool_use_id] = name
+                    # Start analytics record (exec_ms filled in on result)
+                    _tool_analytics.append({
+                        "ts": _now_iso(),
+                        "name": name,
+                        "elapsed_ms": elapsed_ms,
+                        "input_snippet": str(inp)[:200],
+                        "tool_use_id": tool_use_id,
+                        "exec_ms": None,
+                        "is_error": False,
+                    })
 
                     logger.info("Tool call | %s | %s", name, summary)
                     _write_jsonl("events.jsonl", {
@@ -274,8 +331,25 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                         "name": name,
                         "summary": summary,
                         "input": inp,
+                        "tool_use_id": tool_use_id,
                         "elapsed_ms": round(elapsed_ms),
                     }
+
+                    # Emit inline image event when an image file is written
+                    if name == "Write":
+                        file_path = inp.get("file_path", "")
+                        if os.path.splitext(file_path)[1].lower() in _IMAGE_EXTS:
+                            yield {
+                                "type": "image",
+                                "path": file_path,
+                                "url": f"/image?path={file_path}",
+                            }
+
+                    # Emit todos panel update for TodoWrite
+                    if name == "TodoWrite":
+                        todos = inp.get("todos", [])
+                        if todos:
+                            yield {"type": "todos", "items": todos}
 
                 elif btype == "text":
                     text = block.get("text", "").strip()
@@ -314,19 +388,46 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                     if tool_use_id in last_tool_call_ts:
                         exec_ms = round(_now_ms() - last_tool_call_ts.pop(tool_use_id), 1)
 
+                    tool_name = tool_id_to_name.get(tool_use_id, "")
+
+                    # Back-fill exec_ms + is_error on the analytics record
+                    for ta in _tool_analytics:
+                        if ta.get("tool_use_id") == tool_use_id:
+                            ta["exec_ms"] = exec_ms
+                            ta["is_error"] = is_error
+                            break
                     logger.info(
-                        "Tool result | id=%s error=%s exec_ms=%s",
-                        tool_use_id[:8], is_error, exec_ms,
+                        "Tool result | id=%s name=%s error=%s exec_ms=%s",
+                        tool_use_id[:8], tool_name, is_error, exec_ms,
                     )
                     _write_jsonl("events.jsonl", {
                         "ts": _now_iso(), "agent_id": agent_id,
                         "event": "tool_result",
                         "tool_use_id": tool_use_id,
+                        "tool_name": tool_name,
                         "is_error": is_error,
                         "result_snippet": result_snippet,
                         "exec_ms": exec_ms,
                         "elapsed_ms": elapsed_ms,
                     })
+
+                    # Emit bash output for expandable UI cards
+                    if tool_name == "Bash":
+                        if isinstance(result_content, list):
+                            content_str = "\n".join(
+                                b.get("text", "") for b in result_content if b.get("type") == "text"
+                            )[:2000]
+                        elif isinstance(result_content, str):
+                            content_str = result_content[:2000]
+                        else:
+                            content_str = ""
+                        yield {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "name": tool_name,
+                            "content": content_str,
+                            "is_error": is_error,
+                        }
 
         # ── rate limit ────────────────────────────────────────────────────
         elif event_type == "rate_limit_event":
@@ -427,6 +528,9 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         "had_stderr": bool(stderr_text),
     }
     _write_jsonl("sessions.jsonl", session_summary)
+
+    # Persist to analytics DB (best-effort, non-blocking)
+    analytics.record_session(session_summary, _tool_analytics)
 
     # Append to in-memory conversation history
     turns = _conversation_history.setdefault(agent_id, [])

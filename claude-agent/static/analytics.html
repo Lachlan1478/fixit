@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Agent Analytics</title>
+  <style>
+    :root {
+      --bg: #0f0f11; --surface: #1a1a1f; --surface2: #24242b;
+      --border: #2e2e38; --text: #e8e8f0; --muted: #888899;
+      --accent: #7c6af7; --green: #22c55e; --yellow: #eab308; --red: #ef4444;
+      --r: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui,-apple-system,sans-serif; font-size: 13px; line-height: 1.5; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .page { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
+
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+    header h1 { font-size: 20px; font-weight: 700; }
+    header .nav { font-size: 12px; color: var(--muted); }
+    .refresh-btn { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r); padding: 6px 14px; font-size: 12px; cursor: pointer; }
+    .refresh-btn:hover { border-color: var(--accent); }
+
+    /* Summary cards */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px 16px; }
+    .card-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+    .card-value { font-size: 26px; font-weight: 700; font-family: 'Menlo','Consolas',monospace; line-height: 1.1; }
+    .card-value.green  { color: var(--green); }
+    .card-value.yellow { color: var(--yellow); }
+    .card-value.red    { color: var(--red); }
+    .card-value.accent { color: var(--accent); }
+    .card-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* Section heading */
+    h2 { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 28px 0 12px; }
+
+    /* Tables */
+    .tbl-wrap { overflow-x: auto; border-radius: var(--r); border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { background: var(--surface2); padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; border-bottom: 1px solid var(--border); }
+    td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+    .mono { font-family: 'Menlo','Consolas',monospace; }
+    .pill { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: 10px; font-weight: 700; }
+    .pill.success { background: rgba(34,197,94,.15); color: var(--green); }
+    .pill.error   { background: rgba(239,68,68,.15); color: var(--red); }
+    .pill.rate_limited { background: rgba(234,179,8,.15); color: var(--yellow); }
+
+    /* Bar chart */
+    .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 16px; margin-bottom: 4px; overflow-x: auto; }
+    .bar-chart { display: flex; align-items: flex-end; gap: 4px; height: 120px; min-width: 400px; }
+    .bar-col { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 28px; }
+    .bar-rect { width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; transition: opacity .2s; cursor: default; }
+    .bar-rect:hover { opacity: .75; }
+    .bar-label { font-size: 9px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: clip; max-width: 40px; }
+    .bar-val { font-size: 9px; color: var(--muted); margin-bottom: 2px; }
+
+    /* Perf box */
+    .perf-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .perf-cell { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; text-align: center; }
+    .perf-cell .pct { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+    .perf-cell .val { font-size: 18px; font-weight: 700; font-family: 'Menlo','Consolas',monospace; color: var(--accent); }
+
+    .empty { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }
+    .err   { color: var(--red);   font-size: 12px; }
+  </style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>📊 Analytics</h1>
+    <div style="display:flex;align-items:center;gap:16px">
+      <div class="nav"><a href="/">← Agent UI</a></div>
+      <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Summary cards -->
+  <div class="cards" id="cards">
+    <div class="card"><div class="card-label">Loading…</div></div>
+  </div>
+
+  <!-- Cost over time -->
+  <h2>Daily Cost (last 30 days)</h2>
+  <div class="chart-wrap">
+    <div class="bar-chart" id="cost-chart"><div class="empty">No data</div></div>
+  </div>
+
+  <!-- Tool usage -->
+  <h2>Tool Usage</h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Tool</th><th>Calls</th><th>Errors</th><th>Error %</th><th>Avg exec ms</th></tr></thead>
+      <tbody id="tool-tbody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Timing percentiles -->
+  <h2>Session Timing Percentiles</h2>
+  <div class="perf-grid" id="perf-grid">
+    <div class="perf-cell"><div class="pct">Loading…</div></div>
+  </div>
+
+  <!-- UI telemetry -->
+  <h2>UI Telemetry Events</h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Event Type</th><th>Count</th></tr></thead>
+      <tbody id="tel-tbody"><tr><td colspan="2" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Recent sessions -->
+  <h2>Recent Sessions</h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>Agent</th><th>Model</th><th>Outcome</th><th>Duration</th><th>Tools</th><th>Cost</th><th>Prompt</th></tr></thead>
+      <tbody id="sess-tbody"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function esc(s) {
+  return String(s ?? '—').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmt(n, dec = 0) {
+  if (n == null) return '—';
+  return Number(n).toFixed(dec);
+}
+
+function fmtMs(ms) {
+  if (ms == null) return '—';
+  if (ms >= 60000) return (ms / 60000).toFixed(1) + 'm';
+  if (ms >= 1000)  return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms) + 'ms';
+}
+
+function fmtTime(iso) {
+  try { return new Date(iso).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
+  catch { return iso || '—'; }
+}
+
+// ── Summary cards ─────────────────────────────────────────────────────────────
+
+async function loadSummary() {
+  const el = document.getElementById('cards');
+  try {
+    const d = await fetch('/analytics/summary').then(r => r.json());
+    const successRate = d.total_sessions
+      ? Math.round((d.success_count / d.total_sessions) * 100) : 0;
+    el.innerHTML = [
+      { label: 'Total Sessions', value: d.total_sessions ?? 0, cls: 'accent' },
+      { label: 'Last 7 Days',    value: d.sessions_last_7d ?? 0, cls: '' },
+      { label: 'Success Rate',   value: successRate + '%', cls: successRate >= 80 ? 'green' : 'yellow' },
+      { label: 'Total Cost',     value: '$' + fmt(d.total_cost_usd, 4), cls: '' },
+      { label: 'Avg Duration',   value: fmtMs(d.avg_total_ms), cls: '' },
+      { label: 'Tool Calls',     value: d.total_tool_calls ?? 0, cls: '' },
+      { label: 'Avg Tools/Task', value: fmt(d.avg_tools_per_session, 1), cls: '' },
+      { label: 'Rate Limits',    value: d.total_rate_limit_events ?? 0, cls: d.total_rate_limit_events > 0 ? 'yellow' : '' },
+      { label: 'UI Events',      value: d.total_telemetry_events ?? 0, cls: '' },
+      { label: 'Input Tokens',   value: (d.total_input_tokens ?? 0).toLocaleString(), cls: '' },
+      { label: 'Output Tokens',  value: (d.total_output_tokens ?? 0).toLocaleString(), cls: '' },
+      { label: 'Errors',         value: d.error_count ?? 0, cls: d.error_count > 0 ? 'red' : 'green' },
+    ].map(c => `<div class="card">
+      <div class="card-label">${esc(c.label)}</div>
+      <div class="card-value ${c.cls}">${esc(c.value)}</div>
+    </div>`).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="err">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Cost chart ────────────────────────────────────────────────────────────────
+
+async function loadCostChart() {
+  const el = document.getElementById('cost-chart');
+  try {
+    const d = await fetch('/analytics/cost?days=30').then(r => r.json());
+    const rows = d.data || [];
+    if (!rows.length) { el.innerHTML = '<div class="empty">No cost data yet</div>'; return; }
+
+    const maxCost = Math.max(...rows.map(r => r.cost_usd || 0), 0.0001);
+    el.innerHTML = rows.map(r => {
+      const pct = Math.max(4, Math.round(((r.cost_usd || 0) / maxCost) * 100));
+      const label = (r.day || '').slice(5); // MM-DD
+      return `<div class="bar-col" title="${label}: $${fmt(r.cost_usd, 6)} (${r.sessions} sessions)">
+        <div class="bar-val">$${fmt(r.cost_usd, 4)}</div>
+        <div class="bar-rect" style="height:${pct}%"></div>
+        <div class="bar-label">${esc(label)}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="err">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Tool table ────────────────────────────────────────────────────────────────
+
+async function loadTools() {
+  const tbody = document.getElementById('tool-tbody');
+  try {
+    const d = await fetch('/analytics/tools').then(r => r.json());
+    const rows = d.tools || [];
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No tool data yet</td></tr>'; return; }
+
+    tbody.innerHTML = rows.map(r => {
+      const errPct = r.call_count ? Math.round((r.error_count / r.call_count) * 100) : 0;
+      return `<tr>
+        <td class="mono">${esc(r.tool_name)}</td>
+        <td>${esc(r.call_count)}</td>
+        <td>${esc(r.error_count)}</td>
+        <td style="color:${errPct > 10 ? 'var(--red)' : 'var(--muted)'}">${errPct}%</td>
+        <td class="mono">${fmtMs(r.avg_exec_ms)}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="err">${esc(e.message)}</td></tr>`;
+  }
+}
+
+// ── Perf percentiles ──────────────────────────────────────────────────────────
+
+async function loadPerf() {
+  const el = document.getElementById('perf-grid');
+  try {
+    const d = await fetch('/analytics/perf').then(r => r.json());
+    if (!d.count) { el.innerHTML = '<div class="perf-cell"><div class="pct">No data yet</div></div>'; return; }
+
+    el.innerHTML = [
+      { pct: 'p25', val: fmtMs(d.p25_ms) },
+      { pct: 'p50 (median)', val: fmtMs(d.p50_ms) },
+      { pct: 'p75', val: fmtMs(d.p75_ms) },
+      { pct: 'p90', val: fmtMs(d.p90_ms) },
+      { pct: 'p99', val: fmtMs(d.p99_ms) },
+      { pct: 'min', val: fmtMs(d.min_ms) },
+      { pct: 'max', val: fmtMs(d.max_ms) },
+      { pct: 'mean', val: fmtMs(d.mean_ms) },
+    ].map(c => `<div class="perf-cell">
+      <div class="pct">${c.pct}</div>
+      <div class="val">${c.val}</div>
+    </div>`).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+
+// ── Telemetry summary ─────────────────────────────────────────────────────────
+
+async function loadTelemetry() {
+  const tbody = document.getElementById('tel-tbody');
+  try {
+    const d = await fetch('/analytics/telemetry/summary').then(r => r.json());
+    const rows = d.events || [];
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="2" class="empty">No UI events yet</td></tr>'; return; }
+
+    const total = rows.reduce((s, r) => s + r.count, 0);
+    tbody.innerHTML = rows.map(r => `<tr>
+      <td class="mono">${esc(r.event_type)}</td>
+      <td>${esc(r.count)} <span style="color:var(--muted);font-size:10px">(${Math.round(r.count/total*100)}%)</span></td>
+    </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="2" class="err">${esc(e.message)}</td></tr>`;
+  }
+}
+
+// ── Sessions table ────────────────────────────────────────────────────────────
+
+async function loadSessions() {
+  const tbody = document.getElementById('sess-tbody');
+  try {
+    const d = await fetch('/analytics/sessions?limit=50').then(r => r.json());
+    const rows = d.sessions || [];
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No sessions yet</td></tr>'; return; }
+
+    tbody.innerHTML = rows.map(r => `<tr>
+      <td class="mono" style="white-space:nowrap">${fmtTime(r.ts)}</td>
+      <td>${esc(r.agent_id)}</td>
+      <td class="mono" style="font-size:10px">${esc((r.model || '').replace('claude-','').replace(/-\d{8,}/,''))}</td>
+      <td><span class="pill ${esc(r.outcome)}">${esc(r.outcome)}</span></td>
+      <td class="mono">${fmtMs(r.total_ms)}</td>
+      <td>${esc(r.tool_call_count ?? 0)}</td>
+      <td class="mono">${r.total_cost_usd != null ? '$' + fmt(r.total_cost_usd, 6) : '—'}</td>
+      <td style="color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.prompt_snippet)}</td>
+    </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="err">${esc(e.message)}</td></tr>`;
+  }
+}
+
+// ── Load all ──────────────────────────────────────────────────────────────────
+
+function loadAll() {
+  loadSummary();
+  loadCostChart();
+  loadTools();
+  loadPerf();
+  loadTelemetry();
+  loadSessions();
+}
+
+loadAll();
+</script>
+</body>
+</html>

@@ -10,10 +10,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import analytics
 import claude_session as cs
 import rate_limit as rl
 from notifications import send_notification
@@ -26,8 +27,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+_LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    analytics.init_db(_LOGS_DIR)
     yield
 
 
@@ -113,6 +118,44 @@ async def get_history(agent_id: str):
     return {"history": cs.get_history(agent_id)}
 
 
+_TREE_SKIP = {
+    ".git", "__pycache__", "node_modules", ".venv", "venv", ".next",
+    "dist", "build", ".cache", ".pytest_cache", "*.egg-info",
+}
+
+
+def _build_tree(abs_path: str, rel_path: str, depth: int) -> dict:
+    name = os.path.basename(abs_path) or "workspace"
+    node: dict = {"name": name, "path": rel_path, "type": "dir", "children": []}
+    if depth == 0:
+        return node
+    try:
+        entries = sorted(os.listdir(abs_path), key=lambda e: (not os.path.isdir(os.path.join(abs_path, e)), e.lower()))
+    except PermissionError:
+        return node
+    for entry in entries:
+        if entry.startswith(".") or entry in _TREE_SKIP:
+            continue
+        child_abs = os.path.join(abs_path, entry)
+        child_rel = (rel_path + "/" + entry).lstrip("/")
+        if os.path.isdir(child_abs):
+            node["children"].append(_build_tree(child_abs, child_rel, depth - 1))
+        else:
+            node["children"].append({
+                "name": entry,
+                "path": child_rel,
+                "type": "file",
+                "size": os.path.getsize(child_abs),
+            })
+    return node
+
+
+@app.get("/tree")
+async def get_tree(depth: int = 4):
+    depth = max(1, min(depth, 6))
+    return _build_tree(WORKSPACE_ROOT, "", depth)
+
+
 @app.get("/files")
 async def list_files(path: str = ""):
     if path:
@@ -170,6 +213,93 @@ async def get_repo():
         "modified_files": modified,
         "diff_file_count": diff_file_count,
     }
+
+
+_IMAGE_MIMETYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+}
+
+
+@app.get("/image")
+async def get_image(path: str):
+    """Serve an image file from within the workspace."""
+    if os.path.isabs(path):
+        abs_path = os.path.normpath(path)
+    else:
+        abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
+    if not (abs_path.startswith(WORKSPACE_ROOT + os.sep) or abs_path == WORKSPACE_ROOT):
+        raise HTTPException(status_code=403, detail="Path outside workspace")
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    ext = os.path.splitext(abs_path)[1].lower()
+    if ext not in _IMAGE_MIMETYPES:
+        raise HTTPException(status_code=400, detail="Not an image file")
+    return FileResponse(abs_path, media_type=_IMAGE_MIMETYPES[ext])
+
+
+@app.get("/analytics")
+async def analytics_redirect():
+    return RedirectResponse(url="/static/analytics.html")
+
+
+class TelemetryEvent(BaseModel):
+    session_key: str
+    agent_id: str = "default"
+    event_type: str
+    payload: dict = {}
+    ts: str | None = None
+
+
+@app.post("/telemetry")
+async def post_telemetry(event: TelemetryEvent):
+    analytics.record_telemetry(
+        session_key=event.session_key,
+        agent_id=event.agent_id,
+        event_type=event.event_type,
+        payload=event.payload,
+        client_ts=event.ts,
+    )
+    return {"ok": True}
+
+
+@app.get("/analytics/summary")
+async def analytics_summary():
+    return analytics.query_summary()
+
+
+@app.get("/analytics/sessions")
+async def analytics_sessions(limit: int = 50, offset: int = 0):
+    return {"sessions": analytics.query_sessions(limit=limit, offset=offset)}
+
+
+@app.get("/analytics/tools")
+async def analytics_tools(limit: int = 30):
+    return {"tools": analytics.query_tools(limit=limit)}
+
+
+@app.get("/analytics/perf")
+async def analytics_perf():
+    return analytics.query_perf()
+
+
+@app.get("/analytics/cost")
+async def analytics_cost(days: int = 30):
+    return {"days": days, "data": analytics.query_cost(days=days)}
+
+
+@app.get("/analytics/telemetry/summary")
+async def analytics_telemetry_summary():
+    return {"events": analytics.query_telemetry_summary()}
+
+
+@app.get("/analytics/rate_limits")
+async def analytics_rate_limits(limit: int = 20):
+    return {"events": analytics.query_rate_limit_events(limit=limit)}
 
 
 @app.get("/file")

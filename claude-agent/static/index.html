@@ -19,10 +19,11 @@
       --r: 10px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: system-ui,-apple-system,sans-serif; font-size: 15px; line-height: 1.5; }
-    .container { max-width: 480px; margin: 0 auto; padding-bottom: 48px; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui,-apple-system,sans-serif; font-size: 13px; line-height: 1.5; }
+    .container { max-width: 480px; margin: 0 auto; padding-bottom: 0; }
 
-    header { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; }
+    .sticky-header { position: sticky; top: 0; z-index: 10; background: var(--bg); }
+    header { border-bottom: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; }
     header h1 { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .3s; }
     .status-dot.live    { background: var(--green); box-shadow: 0 0 6px var(--green); }
@@ -33,6 +34,7 @@
     .status-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 
     section { padding: 16px; border-bottom: 1px solid var(--border); }
+    section.prompt-section { position: sticky; bottom: 0; z-index: 5; background: var(--bg); border-bottom: none; border-top: 1px solid var(--border); }
     .section-title { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
 
     textarea { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); color: var(--text); padding: 12px; font-size: 15px; font-family: inherit; resize: vertical; min-height: 90px; outline: none; transition: border-color .2s; }
@@ -48,20 +50,26 @@
     .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Model selector */
-    .model-row { display: flex; gap: 6px; margin-bottom: 10px; }
-    .model-btn { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; flex: 1; text-align: center; }
+    /* Options dropdown */
+    .extras-anchor { position: relative; }
+    .extras-dropdown { display: none; position: absolute; bottom: calc(100% + 8px); right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 8px; width: 190px; z-index: 20; box-shadow: 0 8px 28px rgba(0,0,0,.55); }
+    .extras-dropdown.open { display: block; }
+    .extras-models { display: flex; gap: 4px; margin-bottom: 6px; }
+    .model-btn { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 5px 0; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; flex: 1; text-align: center; }
     .model-btn:hover { border-color: var(--accent); color: var(--text); }
     .model-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .model-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .extras-divider { height: 1px; background: var(--border); margin: 6px 0; }
+    .extras-chip { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--muted); padding: 6px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; font-family: inherit; transition: background .12s, color .12s; }
+    .extras-chip:hover { background: var(--surface2); color: var(--text); opacity: 1; }
 
     /* Conversation history */
-    #history-list { display: flex; flex-direction: column; gap: 12px; max-height: 420px; overflow-y: auto; }
+    #history-list { display: flex; flex-direction: column; gap: 8px; }
     .history-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px 0; }
     .chat-turn { display: flex; flex-direction: column; gap: 8px; }
     .chat-user { align-self: flex-end; max-width: 85%; }
     .chat-assistant { align-self: flex-start; max-width: 95%; }
-    .chat-bubble { border-radius: 12px; padding: 10px 14px; font-size: 14px; line-height: 1.55; }
+    .chat-bubble { border-radius: 12px; padding: 8px 11px; font-size: 12px; line-height: 1.55; }
     .chat-user .chat-bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
     .chat-assistant .chat-bubble { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-bottom-left-radius: 4px; }
     .chat-meta { font-size: 10px; color: var(--muted); margin-top: 3px; padding: 0 4px; }
@@ -89,20 +97,40 @@
     .feed-item.status .feed-label { color: var(--yellow); }
     .feed-time { font-size: 10px; font-weight: 400; color: var(--muted); letter-spacing: 0; text-transform: none; margin-left: auto; }
 
-    /* File browser */
-    #file-browser { margin-top: 4px; }
-    .fb-breadcrumb { font-size: 11px; color: var(--muted); font-family: 'Menlo','Consolas',monospace; margin-bottom: 8px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-    .fb-breadcrumb span { cursor: pointer; color: var(--accent); }
-    .fb-breadcrumb span:hover { text-decoration: underline; }
-    .fb-breadcrumb .sep { color: var(--border); cursor: default; }
-    .fb-tree { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
-    .fb-entry { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: 'Menlo','Consolas',monospace; transition: background .15s; user-select: none; }
-    .fb-entry:hover { background: var(--surface2); }
-    .fb-entry .fb-icon { font-size: 14px; width: 18px; text-align: center; flex-shrink: 0; }
-    .fb-entry .fb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .fb-entry .fb-size { font-size: 10px; color: var(--muted); flex-shrink: 0; }
-    .fb-entry.dir { color: var(--accent); }
-    .fb-entry.file { color: var(--text); }
+    /* Image feed cards */
+    .feed-item.image { border-left-color: #a855f7; }
+    .feed-item.image .feed-label { color: #a855f7; }
+    .feed-thumb { max-width: 100%; max-height: 220px; border-radius: 6px; margin-top: 6px; cursor: zoom-in; display: block; object-fit: contain; }
+    /* Image lightbox */
+    #img-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 60; align-items: center; justify-content: center; padding: 20px; cursor: zoom-out; }
+    #img-overlay.open { display: flex; }
+    #img-overlay img { max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain; }
+
+    /* Bash expansion */
+    .feed-expand-btn { background: none; border: none; color: var(--accent); font-size: 10px; padding: 3px 0; cursor: pointer; text-decoration: underline; font-family: inherit; display: block; margin-top: 4px; }
+    .bash-output { display: none; margin-top: 6px; background: rgba(0,0,0,.4); border-radius: 4px; padding: 6px 8px; font-family: 'Menlo','Consolas',monospace; font-size: 11px; color: var(--text); white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto; }
+    .bash-output.open { display: block; }
+    .feed-item.bash-err .feed-label { color: var(--red); }
+
+    /* View tabs */
+    .view-tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .view-tab { background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 20px; font-size: 12px; font-weight: 600; cursor: pointer; letter-spacing: .04em; text-transform: uppercase; }
+    .view-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    /* Explorer */
+    .explorer-wrap { padding: 12px 16px; }
+    .explorer-breadcrumb { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; font-family: 'Menlo','Consolas',monospace; }
+    .bc-seg { color: var(--accent); cursor: pointer; }
+    .bc-seg:hover { text-decoration: underline; }
+    .bc-sep { color: var(--muted); }
+    .explorer-list { display: flex; flex-direction: column; gap: 2px; }
+    .exp-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .exp-row:hover { background: var(--surface2); }
+    .exp-icon { flex-shrink: 0; font-size: 14px; }
+    .exp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .exp-name.dir  { color: var(--accent); }
+    .exp-name.file { color: var(--text); }
+    .exp-size { font-size: 10px; color: var(--muted); flex-shrink: 0; font-family: 'Menlo','Consolas',monospace; }
 
     /* File viewer overlay */
     #file-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 50; padding: 16px; }
@@ -113,25 +141,6 @@
     .fo-content { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; flex: 1; overflow-y: auto; }
     .fo-content pre { white-space: pre-wrap; word-break: break-all; font-family: 'Menlo','Consolas',monospace; font-size: 12px; color: var(--text); line-height: 1.6; }
 
-    /* Repository */
-    .files-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; min-height: 20px; }
-    .file-chip { background: var(--surface2); border-radius: 4px; padding: 2px 8px; font-size: 11px; font-family: 'Menlo','Consolas',monospace; color: var(--yellow); }
-    .repo-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; font-family: 'Menlo','Consolas',monospace; font-size: 12px; line-height: 1.6; overflow-x: auto; white-space: pre; max-height: 200px; overflow-y: auto; }
-    details.repo-details { margin-top: 8px; }
-    details.repo-details summary { font-size: 12px; color: var(--muted); padding: 6px 0; cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
-    details.repo-details summary::before { content: '▶'; font-size: 9px; transition: transform .2s; }
-    details.repo-details[open] summary::before { transform: rotate(90deg); }
-    .gs-branch   { color: var(--accent); }
-    .gs-modified { color: var(--yellow); }
-    .gs-added    { color: var(--green); }
-    .gs-deleted  { color: var(--red); }
-    .gs-untracked { color: var(--muted); }
-    .d-add  { color: var(--green); }
-    .d-del  { color: var(--red); }
-    .d-hunk { color: var(--accent); }
-    .d-file { color: var(--text); font-weight: 600; }
-    .d-hdr  { color: var(--muted); }
-    .d-ctx  { color: var(--muted); }
 
     #toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: var(--red); color: #fff; padding: 10px 18px; border-radius: var(--r); font-size: 13px; z-index: 100; display: none; max-width: 440px; text-align: center; }
 
@@ -140,6 +149,32 @@
     #rate-limit-banner .rl-title { font-size: 13px; font-weight: 700; color: var(--yellow); margin-bottom: 4px; }
     #rate-limit-banner .rl-body  { font-size: 12px; color: #d4a700; line-height: 1.5; }
     #rate-limit-banner .rl-countdown { font-size: 22px; font-weight: 700; color: var(--yellow); font-family: 'Menlo','Consolas',monospace; margin: 8px 0 4px; letter-spacing: .04em; }
+
+    /* ── Agent tabs ──────────────────────────────────────────────────────── */
+    .tab-bar { display: flex; gap: 4px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tab-bar::-webkit-scrollbar { display: none; }
+    .agent-tab { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); border-radius: 20px; padding: 4px 14px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: all .15s; flex-shrink: 0; }
+    .agent-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .agent-tab:hover:not(.active) { border-color: var(--accent); color: var(--text); }
+    .tab-add { background: transparent; color: var(--muted); border: 1px dashed var(--border); border-radius: 20px; padding: 4px 10px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
+    .tab-add:hover { border-color: var(--accent); color: var(--accent); }
+
+
+    /* ── Todos panel ─────────────────────────────────────────────────────── */
+    #todos-section { display: none; padding: 16px; border-bottom: 1px solid var(--border); }
+    #todos-section.visible { display: block; }
+    .todo-list { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+    .todo-item { display: flex; align-items: flex-start; gap: 10px; padding: 7px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; line-height: 1.4; }
+    .todo-item.completed { opacity: .55; text-decoration: line-through; }
+    .todo-item.in_progress { border-left: 3px solid var(--yellow); }
+    .todo-item.pending     { border-left: 3px solid var(--border); }
+    .todo-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+
+    /* ── Live preview ────────────────────────────────────────────────────── */
+    #preview-section { display: none; padding: 16px; border-bottom: 1px solid var(--border); }
+    #preview-section.visible { display: block; }
+    .preview-url { font-size: 11px; font-family: 'Menlo','Consolas',monospace; color: var(--accent); margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #preview-frame { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: var(--r); background: #fff; }
   </style>
 </head>
 <body>
@@ -151,6 +186,7 @@
   </div>
   <div class="fo-content"><pre id="fo-content"></pre></div>
 </div>
+<div id="img-overlay" onclick="closeImageOverlay()"><img id="img-overlay-src" src="" alt=""></div>
 <div id="rate-limit-banner">
   <div class="rl-title">⏳ Claude Usage Limit Reached</div>
   <div class="rl-countdown" id="rl-countdown">—</div>
@@ -158,6 +194,7 @@
 </div>
 <div class="container">
 
+  <div class="sticky-header">
   <header>
     <h1>🤖 Claude Agent</h1>
     <div class="status-label">
@@ -166,29 +203,38 @@
     </div>
   </header>
 
-  <!-- Prompt -->
-  <section>
-    <div class="section-title">Send Prompt</div>
-    <div class="model-row">
-      <button class="model-btn" data-model="haiku" onclick="selectModel('haiku')">Haiku</button>
-      <button class="model-btn active" data-model="sonnet" onclick="selectModel('sonnet')">Sonnet</button>
-      <button class="model-btn" data-model="opus" onclick="selectModel('opus')">Opus</button>
-    </div>
-    <textarea id="prompt" placeholder="Ask Claude to do something…" rows="4"></textarea>
-    <div class="form-row">
-      <button id="send-btn" onclick="sendPrompt()">Send →</button>
-      <div class="spinner" id="spinner"></div>
-      <button class="danger" id="reset-btn" onclick="resetSession()" title="Start fresh conversation">Reset</button>
-    </div>
-  </section>
+  <!-- Agent tabs -->
+  <div class="tab-bar" id="tab-bar">
+    <button class="agent-tab active" data-agent="default" onclick="switchAgent('default')">default</button>
+    <button class="agent-tab" data-agent="frontend" onclick="switchAgent('frontend')">frontend</button>
+    <button class="agent-tab" data-agent="backend" onclick="switchAgent('backend')">backend</button>
+    <button class="tab-add" onclick="addAgentTab()" title="New agent">+</button>
+  </div>
+
+  <!-- View tabs -->
+  <div class="view-tab-bar">
+    <button class="view-tab active" id="view-tab-chat" onclick="switchView('chat')">Chat</button>
+    <button class="view-tab" id="view-tab-files" onclick="switchView('files')">Files</button>
+    <button class="view-tab" id="view-tab-feed" onclick="switchView('feed')">Feed</button>
+  </div>
+  </div><!-- end .sticky-header -->
+
+  <!-- Chat view -->
+  <div id="chat-view">
 
   <!-- Conversation history -->
   <section>
     <div class="section-title">
       <span>Conversation <span id="history-count" style="font-weight:400;opacity:.6"></span></span>
+      <button class="secondary" onclick="clearHistory()">Clear</button>
     </div>
     <div id="history-list"><div class="history-empty">No conversation yet</div></div>
   </section>
+
+  </div><!-- end #chat-view -->
+
+  <!-- Feed view -->
+  <div id="feed-view" style="display:none">
 
   <!-- Live feed -->
   <section>
@@ -199,45 +245,145 @@
     <div id="feed-list"><div class="feed-empty">No activity yet</div></div>
   </section>
 
-  <!-- File browser -->
-  <section>
-    <div class="section-title">
-      <span>Files</span>
-      <button class="secondary" id="browse-btn" onclick="toggleFileBrowser()">Browse</button>
+  <!-- Todos panel (shown when TodoWrite fires) -->
+  <div id="todos-section">
+    <div class="section-title" style="padding:0 0 0 0;margin-bottom:10px">
+      <span>Plan</span>
+      <button class="secondary" onclick="hideTodos()" style="font-size:11px;padding:4px 10px">Hide</button>
     </div>
-    <div id="file-browser" style="display:none">
-      <div class="fb-breadcrumb" id="fb-breadcrumb"></div>
-      <div class="fb-tree" id="fb-tree"></div>
-    </div>
-  </section>
+    <div class="todo-list" id="todo-list"></div>
+  </div>
 
-  <!-- Repository -->
-  <section>
-    <div class="section-title">
-      <span>Repository</span>
-      <button class="secondary" onclick="loadRepo()">Refresh</button>
+  <!-- Live preview (shown when Claude writes an HTML file) -->
+  <div id="preview-section">
+    <div class="section-title" style="margin-bottom:8px">
+      <span>Preview</span>
+      <button class="secondary" onclick="hidePreview()" style="font-size:11px;padding:4px 10px">Hide</button>
     </div>
-    <div class="files-row" id="repo-files"><span style="color:var(--muted);font-size:13px">No modified files</span></div>
-    <details class="repo-details" open>
-      <summary>Git Status</summary>
-      <pre class="repo-block" id="repo-status">—</pre>
-    </details>
-    <details class="repo-details">
-      <summary>Diff</summary>
-      <pre class="repo-block" id="repo-diff">—</pre>
-    </details>
+    <div class="preview-url" id="preview-url"></div>
+    <iframe id="preview-frame" sandbox="allow-scripts"></iframe>
+  </div>
+
+  </div><!-- end #feed-view -->
+
+  <!-- Files view -->
+  <div id="files-view" style="display:none">
+    <div class="explorer-wrap">
+      <div class="section-title">
+        <span>Files</span>
+        <button class="secondary" onclick="loadExplorer(_explorerCwd)">Refresh</button>
+      </div>
+      <div class="explorer-breadcrumb" id="explorer-breadcrumb"></div>
+      <div class="explorer-list" id="explorer-list"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Prompt (sticky bottom, visible on Chat and Feed) -->
+  <section id="prompt-section" class="prompt-section">
+    <textarea id="prompt" placeholder="Ask Claude to do something…" rows="3"></textarea>
+    <div class="form-row">
+      <button id="send-btn" onclick="sendPrompt()">Send →</button>
+      <div class="spinner" id="spinner"></div>
+      <div class="extras-anchor">
+        <button class="secondary" id="extras-btn" onclick="toggleExtras()" title="Options" style="padding:8px 10px;font-size:15px;line-height:1">⚙</button>
+        <div id="prompt-extras" class="extras-dropdown">
+          <div class="extras-models">
+            <button class="model-btn" data-model="haiku" onclick="selectModel('haiku')">Haiku</button>
+            <button class="model-btn active" data-model="sonnet" onclick="selectModel('sonnet')">Sonnet</button>
+            <button class="model-btn" data-model="opus" onclick="selectModel('opus')">Opus</button>
+          </div>
+          <div class="extras-divider"></div>
+          <button class="extras-chip" onclick="fillChip('Fix the last error')">Fix last error</button>
+          <button class="extras-chip" onclick="fillChip('Add tests for the code you just wrote')">Add tests</button>
+          <button class="extras-chip" onclick="fillChip('Explain what you just did')">Explain</button>
+          <button class="extras-chip" onclick="fillChip('Refactor for readability')">Refactor</button>
+          <button class="extras-chip" onclick="fillChip('What files did you change?')">Changed files</button>
+        </div>
+      </div>
+      <button class="danger" id="reset-btn" onclick="resetSession()" title="Start fresh conversation">Reset</button>
+    </div>
   </section>
 
 </div>
 <script>
-// ── Model selector ─────────────────────────────────────────────────────────
-let _model = 'sonnet';
-function selectModel(m) {
-  _model = m;
-  document.querySelectorAll('.model-btn').forEach(b => b.classList.toggle('active', b.dataset.model === m));
+// ── Analytics telemetry ──────────────────────────────────────────────────────
+const _sessionKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
+  ? crypto.randomUUID()
+  : Math.random().toString(36).slice(2);
+
+function telemetry(eventType, payload) {
+  try {
+    fetch('/telemetry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_key: _sessionKey,
+        agent_id: _agentId,
+        event_type: eventType,
+        payload: payload || {},
+        ts: new Date().toISOString(),
+      }),
+    }).catch(() => {});  // fire-and-forget, never block UI
+  } catch (_) {}
 }
 
-// ── Rate-limit state ───────────────────────────────────────────────────────
+// ── Agent tabs ──────────────────────────────────────────────────────────────
+let _agentId = 'default';
+let _clearedAtIndex = 0;
+let _lastHistoryLen = 0;
+let _agentTabNames = ['default', 'frontend', 'backend'];
+
+function switchAgent(id) {
+  const prev = _agentId;
+  _agentId = id;
+  document.querySelectorAll('.agent-tab').forEach(b => b.classList.toggle('active', b.dataset.agent === id));
+  clearFeed();
+  loadHistory();
+  telemetry('agent_tab_switched', { from: prev, to: id });
+}
+
+function addAgentTab() {
+  const name = prompt('Agent name:');
+  if (!name || !name.trim()) return;
+  const id = name.trim().replace(/\s+/g, '-').toLowerCase();
+  if (_agentTabNames.includes(id)) { switchAgent(id); return; }
+  _agentTabNames.push(id);
+  const bar = document.getElementById('tab-bar');
+  const addBtn = bar.querySelector('.tab-add');
+  const btn = document.createElement('button');
+  btn.className = 'agent-tab';
+  btn.dataset.agent = id;
+  btn.textContent = id;
+  btn.onclick = () => switchAgent(id);
+  bar.insertBefore(btn, addBtn);
+  switchAgent(id);
+  telemetry('agent_tab_created', { agent_id: id });
+}
+
+// ── Options dropdown ─────────────────────────────────────────────────────────
+function toggleExtras() {
+  document.getElementById('prompt-extras').classList.toggle('open');
+}
+
+function fillChip(text) {
+  const ta = document.getElementById('prompt');
+  ta.value = text;
+  ta.focus();
+  ta.setSelectionRange(text.length, text.length);
+  document.getElementById('prompt-extras').classList.remove('open');
+  telemetry('prompt_chip_used', { text });
+}
+
+// ── Model selector ──────────────────────────────────────────────────────────
+let _model = 'sonnet';
+function selectModel(m) {
+  const prev = _model;
+  _model = m;
+  document.querySelectorAll('.model-btn').forEach(b => b.classList.toggle('active', b.dataset.model === m));
+  telemetry('model_changed', { from: prev, to: m });
+}
+
+// ── Rate-limit state ────────────────────────────────────────────────────────
 let _rateLimitResetAt = null;
 let _pendingPrompt    = null;
 let _countdownTimer   = null;
@@ -302,7 +448,7 @@ function _startRateLimitPolling() {
   }, 10000);
 }
 
-// ── Status ─────────────────────────────────────────────────────────────────
+// ── Status ──────────────────────────────────────────────────────────────────
 function setStatus(state) {
   document.getElementById('status-dot').className = 'status-dot ' + state;
   document.getElementById('status-text').textContent =
@@ -312,7 +458,7 @@ function setStatus(state) {
     state === 'limited' ? 'rate limited'  : 'connecting…';
 }
 
-// ── Toast ──────────────────────────────────────────────────────────────────
+// ── Toast ────────────────────────────────────────────────────────────────────
 let _toastTimer;
 function showToast(msg) {
   const el = document.getElementById('toast');
@@ -321,7 +467,7 @@ function showToast(msg) {
   _toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
 
-// ── Utils ──────────────────────────────────────────────────────────────────
+// ── Utils ────────────────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -353,10 +499,10 @@ function renderMd(text) {
   return s;
 }
 
-// ── Conversation history ───────────────────────────────────────────────────
+// ── Conversation history ─────────────────────────────────────────────────────
 async function loadHistory() {
   try {
-    const data = await fetch('/history/default').then(r => r.json());
+    const data = await fetch(`/history/${encodeURIComponent(_agentId)}`).then(r => r.json());
     renderHistory(data.history || []);
   } catch (_) {}
 }
@@ -364,7 +510,11 @@ async function loadHistory() {
 function renderHistory(turns) {
   const list = document.getElementById('history-list');
   const countEl = document.getElementById('history-count');
-  if (!turns.length) {
+
+  if (turns.length > 0) _lastHistoryLen = turns.length;
+  const visible = _clearedAtIndex > 0 ? turns.slice(_clearedAtIndex) : turns;
+
+  if (!visible.length) {
     list.innerHTML = '<div class="history-empty">No conversation yet</div>';
     countEl.textContent = '';
     return;
@@ -372,8 +522,8 @@ function renderHistory(turns) {
 
   // Group consecutive user+assistant pairs into turns
   const html = [];
-  for (let i = 0; i < turns.length; i++) {
-    const t = turns[i];
+  for (let i = 0; i < visible.length; i++) {
+    const t = visible[i];
     if (t.role === 'user') {
       html.push(`<div class="chat-turn">
         <div class="chat-user">
@@ -381,7 +531,7 @@ function renderHistory(turns) {
           <div class="chat-meta">${fmtTime(t.ts)}</div>
         </div>`);
       // peek at next for assistant response
-      const next = turns[i + 1];
+      const next = visible[i + 1];
       if (next && next.role === 'assistant') {
         const modelLabel = next.model ? next.model.replace('claude-','').replace(/-\d{8,}/,'') : '';
         html.push(`<div class="chat-assistant">
@@ -394,20 +544,30 @@ function renderHistory(turns) {
     }
   }
   list.innerHTML = html.join('');
-  list.scrollTop = list.scrollHeight;
+  window.scrollTo(0, document.body.scrollHeight);
 
-  const pairs = Math.floor(turns.length / 2);
+  const pairs = Math.floor(visible.length / 2);
   countEl.textContent = pairs ? `${pairs} turn${pairs !== 1 ? 's' : ''}` : '';
 }
 
-// ── Feed ───────────────────────────────────────────────────────────────────
+function clearHistory() {
+  _clearedAtIndex = _lastHistoryLen;
+  renderHistory([]);
+}
+
+// ── Feed ─────────────────────────────────────────────────────────────────────
 let _hasFeed = false;
+// Maps tool_use_id → feed item element (for bash expansion)
+const _toolFeedItems = {};
+
 function clearFeed() {
   document.getElementById('feed-list').innerHTML = '<div class="feed-empty">No activity yet</div>';
   _hasFeed = false;
+  // Clear the bash expansion index to avoid holding detached DOM nodes
+  for (const k of Object.keys(_toolFeedItems)) delete _toolFeedItems[k];
 }
 
-function addFeedItem(type, label, summary, elapsed_ms) {
+function addFeedItem(type, label, summary, elapsed_ms, toolUseId) {
   const list = document.getElementById('feed-list');
   if (!_hasFeed) { list.innerHTML = ''; _hasFeed = true; }
   const el = document.createElement('div');
@@ -418,9 +578,63 @@ function addFeedItem(type, label, summary, elapsed_ms) {
     `<div class="feed-summary">${escHtml(summary)}</div>`;
   list.appendChild(el);
   list.scrollTop = list.scrollHeight;
+
+  // Index Bash items so their results can be attached later
+  if (type === 'tool' && toolUseId) {
+    _toolFeedItems[toolUseId] = el;
+  }
+  return el;
 }
 
-// ── Send prompt ────────────────────────────────────────────────────────────
+// ── Todos panel ──────────────────────────────────────────────────────────────
+function renderTodos(items) {
+  const section = document.getElementById('todos-section');
+  const list    = document.getElementById('todo-list');
+  if (!items || !items.length) return;
+  section.classList.add('visible');
+
+  const icons = { completed: '✅', in_progress: '🔄', pending: '⬜' };
+  list.innerHTML = items.map(item => {
+    const status = item.status || 'pending';
+    const icon   = icons[status] || '⬜';
+    return `<div class="todo-item ${escHtml(status)}">
+      <span class="todo-icon">${icon}</span>
+      <span>${escHtml(item.content || '')}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Image lightbox ────────────────────────────────────────────────────────────
+function openImageOverlay(url) {
+  document.getElementById('img-overlay-src').src = url + '&_t=' + Date.now();
+  document.getElementById('img-overlay').classList.add('open');
+  telemetry('image_zoomed', { url });
+}
+function closeImageOverlay() {
+  document.getElementById('img-overlay').classList.remove('open');
+  document.getElementById('img-overlay-src').src = '';
+}
+
+function hideTodos() {
+  document.getElementById('todos-section').classList.remove('visible');
+}
+
+// ── Live preview ─────────────────────────────────────────────────────────────
+function updatePreview(url) {
+  const section   = document.getElementById('preview-section');
+  const frame     = document.getElementById('preview-frame');
+  const urlEl     = document.getElementById('preview-url');
+  const fullUrl   = url.startsWith('http') ? url : window.location.origin + url;
+  urlEl.textContent = fullUrl;
+  frame.src = fullUrl + '?_t=' + Date.now();   // cache-bust
+  section.classList.add('visible');
+}
+
+function hidePreview() {
+  document.getElementById('preview-section').classList.remove('visible');
+}
+
+// ── Send prompt ───────────────────────────────────────────────────────────────
 async function sendPrompt() {
   const textarea = document.getElementById('prompt');
   const prompt = textarea.value.trim();
@@ -435,11 +649,32 @@ async function sendPrompt() {
   _pendingPrompt = prompt;
   textarea.value = '';
 
+  // Immediately show user message in conversation
+  const histList = document.getElementById('history-list');
+  if (histList.querySelector('.history-empty')) histList.innerHTML = '';
+  const userDiv = document.createElement('div');
+  userDiv.className = 'chat-turn';
+  userDiv.innerHTML = `<div class="chat-user">
+    <div class="chat-bubble">${escHtml(prompt)}</div>
+    <div class="chat-meta">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+  </div>`;
+  histList.appendChild(userDiv);
+  histList.scrollTop = histList.scrollHeight;
+  const countEl = document.getElementById('history-count');
+  const turns = histList.querySelectorAll('.chat-turn').length;
+  countEl.textContent = turns ? `${turns} turn${turns !== 1 ? 's' : ''}` : '';
+
+  // Switch to Feed so the user sees live activity
+  switchView('feed');
+  addFeedItem('status', 'Prompt', prompt.length > 100 ? prompt.slice(0, 100) + '…' : prompt);
+
+  telemetry('prompt_sent', { prompt_len: prompt.length, model: _model, agent_id: _agentId });
+
   try {
     const resp = await fetch('/task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, agent_id: 'default', model: _model }),
+      body: JSON.stringify({ prompt, agent_id: _agentId, model: _model }),
     });
 
     if (!resp.ok) {
@@ -469,7 +704,7 @@ async function sendPrompt() {
       setStatus('live');
       _pendingPrompt = null;
     }
-    setTimeout(() => { loadRepo(); loadHistory(); }, 800);
+    setTimeout(() => { loadHistory(); }, 800);
 
   } catch (err) {
     setStatus('error');
@@ -484,93 +719,185 @@ async function sendPrompt() {
 function handleEvent(event) {
   if (event.type === 'status') {
     addFeedItem('status', 'Init', event.message, event.elapsed_ms);
+
   } else if (event.type === 'tool') {
-    addFeedItem('tool', event.name, event.summary, event.elapsed_ms);
+    addFeedItem('tool', event.name, event.summary, event.elapsed_ms, event.tool_use_id);
+
+    // Auto-navigate explorer to the file's directory
+    if (['Write', 'Edit', 'MultiEdit'].includes(event.name)) {
+      const fp = (event.input && event.input.file_path) || '';
+      if (fp) {
+        const dir = fp.includes('/') ? fp.slice(0, fp.lastIndexOf('/')) : '';
+        navigateExplorer(dir);
+      }
+    }
+
+    // Live preview: reload iframe whenever Claude writes an HTML file
+    if (event.name === 'Write') {
+      const path = (event.input && event.input.file_path) || '';
+      if (path.endsWith('.html')) {
+        const filename = path.split('/').pop().replace(/[^a-zA-Z0-9._-]/g, '');
+        if (filename) updatePreview('/static/' + encodeURIComponent(filename));
+      }
+    }
+
+  } else if (event.type === 'tool_result') {
+    // Attach expandable bash output to the matching feed item
+    const el = _toolFeedItems[event.tool_use_id];
+    if (el) {
+      const outputEl = document.createElement('div');
+      outputEl.className = 'bash-output';
+      outputEl.textContent = event.content || '(no output)';
+
+      const btn = document.createElement('button');
+      btn.className = 'feed-expand-btn';
+      const isErr = event.is_error;
+      btn.textContent = isErr ? '▶ Show error' : '▶ Show output';
+      if (isErr) el.classList.add('bash-err');
+
+      btn.onclick = () => {
+        const open = outputEl.classList.toggle('open');
+        btn.textContent = open
+          ? (isErr ? '▼ Hide error' : '▼ Hide output')
+          : (isErr ? '▶ Show error' : '▶ Show output');
+        if (open) telemetry('bash_output_expanded', { tool_use_id: event.tool_use_id, is_error: isErr });
+      };
+
+      el.appendChild(btn);
+      el.appendChild(outputEl);
+    }
+
+  } else if (event.type === 'image') {
+    const el = addFeedItem('image', 'Image', event.path.split('/').pop(), null);
+    const img = document.createElement('img');
+    img.className = 'feed-thumb';
+    img.src = event.url + '&_t=' + Date.now();
+    img.alt = event.path;
+    img.onclick = () => openImageOverlay(event.url);
+    el.appendChild(img);
+
+  } else if (event.type === 'todos') {
+    renderTodos(event.items);
+
   } else if (event.type === 'text') {
     addFeedItem('text', 'Thinking', event.content.slice(0, 120));
+
   } else if (event.type === 'done') {
     addFeedItem('done', 'Done', event.result.slice(0, 100) || '✓');
+    telemetry('task_completed', { result_len: (event.result || '').length });
+    setTimeout(() => switchView('chat'), 1500);
+
   } else if (event.type === 'error') {
     addFeedItem('error', 'Error', event.message);
     showToast(event.message);
+    telemetry('task_error', { message: event.message });
+
   } else if (event.type === 'rate_limited') {
     setStatus('limited');
     addFeedItem('error', 'Rate Limited', `Usage limit hit — resumes at ${event.reset_at ? new Date(event.reset_at).toLocaleTimeString() : 'unknown'}`);
     showRateLimitBanner(event.reset_at, event.message);
+    telemetry('rate_limited_shown', { reset_at: event.reset_at });
   }
 }
 
-// ── Reset session ──────────────────────────────────────────────────────────
+// ── Reset session ─────────────────────────────────────────────────────────────
 async function resetSession() {
   try {
     await fetch('/reset_memory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent_id: 'default' }),
+      body: JSON.stringify({ agent_id: _agentId }),
     });
     clearFeed();
     renderHistory([]);
+    hideTodos();
     addFeedItem('done', 'Session', 'Conversation reset — starting fresh');
+    telemetry('session_reset', { agent_id: _agentId });
   } catch (err) {
     showToast('Reset failed: ' + err.message);
   }
 }
 
-// ── File browser ───────────────────────────────────────────────────────────
-let _fbVisible = false;
-let _fbPath = '';
-
-function toggleFileBrowser() {
-  _fbVisible = !_fbVisible;
-  document.getElementById('file-browser').style.display = _fbVisible ? 'block' : 'none';
-  document.getElementById('browse-btn').textContent = _fbVisible ? 'Hide' : 'Browse';
-  if (_fbVisible) loadFiles(_fbPath);
+// ── File icon helper ──────────────────────────────────────────────────────────
+function _fileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const map = { py:'🐍', js:'📜', ts:'📜', html:'🌐', css:'🎨', json:'📋',
+                md:'📝', png:'🖼️', jpg:'🖼️', gif:'🖼️', svg:'🖼️', sh:'⚙️',
+                txt:'📄', env:'🔑', toml:'📋', yaml:'📋', yml:'📋' };
+  return map[ext] || '📄';
 }
 
-async function loadFiles(path) {
-  _fbPath = path;
-  const tree = document.getElementById('fb-tree');
-  tree.innerHTML = '<div class="fb-entry" style="color:var(--muted)">Loading…</div>';
-  renderBreadcrumb(path);
+// ── View tabs ─────────────────────────────────────────────────────────────────
+function switchView(view) {
+  document.getElementById('chat-view').style.display  = view === 'chat'  ? 'block' : 'none';
+  document.getElementById('files-view').style.display = view === 'files' ? 'block' : 'none';
+  document.getElementById('feed-view').style.display  = view === 'feed'  ? 'block' : 'none';
+  document.getElementById('prompt-section').style.display = view === 'files' ? 'none' : '';
+  document.getElementById('view-tab-chat').classList.toggle('active',  view === 'chat');
+  document.getElementById('view-tab-files').classList.toggle('active', view === 'files');
+  document.getElementById('view-tab-feed').classList.toggle('active',  view === 'feed');
+  if (view === 'files' && document.getElementById('explorer-list').children.length === 1 &&
+      document.getElementById('explorer-list').children[0].textContent === 'Loading…') {
+    loadExplorer(_explorerCwd);
+  }
+  telemetry('view_switched', { view });
+}
+
+// ── File explorer ─────────────────────────────────────────────────────────────
+let _explorerCwd = '';
+
+function navigateExplorer(path) {
+  _explorerCwd = path || '';
+  loadExplorer(_explorerCwd);
+}
+
+async function loadExplorer(path) {
+  const listEl = document.getElementById('explorer-list');
+  listEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading…</div>';
   try {
-    const data = await fetch(`/files?path=${encodeURIComponent(path)}`).then(r => r.json());
-    const items = [];
-    if (path) {
-      // Back entry
-      const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-      items.push(`<div class="fb-entry dir" onclick="loadFiles('${escHtml(parent)}')">
-        <span class="fb-icon">↩</span><span class="fb-name">..</span>
-      </div>`);
-    }
-    for (const d of data.dirs) {
-      items.push(`<div class="fb-entry dir" onclick="loadFiles('${escHtml(d.path)}')">
-        <span class="fb-icon">📁</span><span class="fb-name">${escHtml(d.name)}</span>
-      </div>`);
-    }
-    for (const f of data.files) {
-      items.push(`<div class="fb-entry file" onclick="openFile('${escHtml(f.path)}','${escHtml(f.name)}')">
-        <span class="fb-icon">📄</span>
-        <span class="fb-name">${escHtml(f.name)}</span>
-        <span class="fb-size">${fmtSize(f.size)}</span>
-      </div>`);
-    }
-    tree.innerHTML = items.length ? items.join('') : '<div style="color:var(--muted);font-size:13px;padding:8px">Empty directory</div>';
+    const data = await fetch(`/files?path=${encodeURIComponent(path || '')}`).then(r => r.json());
+    renderExplorer(data);
   } catch (err) {
-    tree.innerHTML = `<div style="color:var(--red);font-size:13px;padding:8px">Error: ${escHtml(err.message)}</div>`;
+    listEl.innerHTML = `<div style="color:var(--red);font-size:12px">Error: ${escHtml(err.message)}</div>`;
   }
 }
 
-function renderBreadcrumb(path) {
-  const el = document.getElementById('fb-breadcrumb');
-  const parts = path ? path.split('/') : [];
-  let html = `<span onclick="loadFiles('')">workspace</span>`;
-  let built = '';
-  for (const p of parts) {
-    built = built ? built + '/' + p : p;
-    const captured = built;
-    html += `<span class="sep">/</span><span onclick="loadFiles('${escHtml(captured)}')">${escHtml(p)}</span>`;
+function renderExplorer(data) {
+  const listEl   = document.getElementById('explorer-list');
+  const bcEl     = document.getElementById('explorer-breadcrumb');
+  const curPath  = data.path || '';
+
+  // Breadcrumb
+  const segs = curPath ? curPath.split('/').filter(Boolean) : [];
+  let bcHtml = `<span class="bc-seg" onclick="navigateExplorer('')">root</span>`;
+  let acc = '';
+  for (const seg of segs) {
+    acc += (acc ? '/' : '') + seg;
+    const p = acc;
+    bcHtml += `<span class="bc-sep">/</span><span class="bc-seg" onclick="navigateExplorer('${escHtml(p)}')">${escHtml(seg)}</span>`;
   }
-  el.innerHTML = html;
+  bcEl.innerHTML = bcHtml;
+
+  // Directory listing
+  const rows = [];
+  for (const d of (data.dirs || [])) {
+    rows.push(`<div class="exp-row" onclick="navigateExplorer('${escHtml(d.path)}')">
+      <span class="exp-icon">📁</span>
+      <span class="exp-name dir">${escHtml(d.name)}</span>
+    </div>`);
+  }
+  for (const f of (data.files || [])) {
+    const icon = _fileIcon(f.name);
+    const size = f.size != null ? fmtSize(f.size) : '';
+    rows.push(`<div class="exp-row" onclick="openFile('${escHtml(f.path)}','${escHtml(f.name)}')">
+      <span class="exp-icon">${icon}</span>
+      <span class="exp-name file">${escHtml(f.name)}</span>
+      ${size ? `<span class="exp-size">${size}</span>` : ''}
+    </div>`);
+  }
+  listEl.innerHTML = rows.length
+    ? rows.join('')
+    : '<div style="color:var(--muted);font-size:12px">Empty directory</div>';
 }
 
 async function openFile(path, name) {
@@ -579,6 +906,7 @@ async function openFile(path, name) {
   document.getElementById('fo-path').textContent = path;
   content.textContent = 'Loading…';
   overlay.classList.add('open');
+  telemetry('file_opened', { path, name });
   try {
     const data = await fetch(`/file?path=${encodeURIComponent(path)}`).then(r => r.json());
     content.textContent = data.exists ? (data.content || '(empty)') : '(file not found)';
@@ -591,47 +919,6 @@ function closeFileOverlay() {
   document.getElementById('file-overlay').classList.remove('open');
 }
 
-// ── Repository ─────────────────────────────────────────────────────────────
-function renderGitStatus(text) {
-  if (!text) return '<span class="gs-branch">Not a git repo</span>';
-  return text.split('\n').map(line => {
-    if (line.startsWith('##')) return `<span class="gs-branch">${escHtml(line)}</span>`;
-    const xy = line.slice(0, 2);
-    let cls = '';
-    if (xy.includes('M')) cls = 'gs-modified';
-    else if (xy.includes('A')) cls = 'gs-added';
-    else if (xy.includes('D')) cls = 'gs-deleted';
-    else if (xy === '??') cls = 'gs-untracked';
-    return `<span class="${cls}">${escHtml(line)}</span>`;
-  }).join('\n');
-}
-
-function renderGitDiff(text) {
-  if (!text) return '<span class="d-ctx">No changes</span>';
-  return text.split('\n').map(line => {
-    if (line.startsWith('diff --git')) return `<span class="d-file">${escHtml(line)}</span>`;
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ')) return `<span class="d-hdr">${escHtml(line)}</span>`;
-    if (line.startsWith('+')) return `<span class="d-add">${escHtml(line)}</span>`;
-    if (line.startsWith('-')) return `<span class="d-del">${escHtml(line)}</span>`;
-    if (line.startsWith('@@')) return `<span class="d-hunk">${escHtml(line)}</span>`;
-    return `<span class="d-ctx">${escHtml(line)}</span>`;
-  }).join('\n');
-}
-
-async function loadRepo() {
-  try {
-    const data = await fetch('/repo').then(r => r.json());
-    setStatus('live');
-    const filesEl = document.getElementById('repo-files');
-    if (data.modified_files && data.modified_files.length > 0) {
-      filesEl.innerHTML = data.modified_files.map(f => `<span class="file-chip">${escHtml(f)}</span>`).join('');
-    } else {
-      filesEl.innerHTML = '<span style="color:var(--muted);font-size:13px">No modified files</span>';
-    }
-    document.getElementById('repo-status').innerHTML = renderGitStatus(data.status || '');
-    document.getElementById('repo-diff').innerHTML = renderGitDiff(data.diff || '');
-  } catch (_) { setStatus('error'); }
-}
 
 // Enter = submit, Shift+Enter = newline
 document.getElementById('prompt').addEventListener('keydown', e => {
@@ -643,10 +930,18 @@ document.getElementById('file-overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeFileOverlay();
 });
 
+// Close options dropdown on outside click
+document.addEventListener('click', e => {
+  const anchor = document.querySelector('.extras-anchor');
+  if (anchor && !anchor.contains(e.target)) {
+    document.getElementById('prompt-extras').classList.remove('open');
+  }
+});
+
 // Initial load
-loadRepo().then(() => setStatus('live'));
+setStatus('live');
 loadHistory();
-setInterval(() => { if (!document.hidden) loadRepo(); }, 15000);
+telemetry('page_load', { referrer: document.referrer, screen: `${screen.width}x${screen.height}` });
 
 // Restore rate-limit banner on refresh
 fetch('/rate_limit_status').then(r => r.json()).then(data => {
