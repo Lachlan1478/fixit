@@ -175,6 +175,19 @@
     #preview-section.visible { display: block; }
     .preview-url { font-size: 11px; font-family: 'Menlo','Consolas',monospace; color: var(--accent); margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #preview-frame { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: var(--r); background: #fff; }
+
+    /* ── Plan overlay ────────────────────────────────────────────────────── */
+    #plan-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 60; flex-direction: column; }
+    #plan-overlay.open { display: flex; }
+    .plan-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+    .plan-title { font-size: 15px; font-weight: 700; }
+    .plan-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .plan-text { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; overflow-y: auto; max-height: 50vh; }
+    .plan-prompt-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+    #plan-refine { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); color: var(--text); padding: 12px; font-size: 14px; font-family: inherit; resize: none; min-height: 70px; outline: none; }
+    #plan-refine:focus { border-color: var(--accent); }
+    .plan-actions { display: flex; gap: 8px; padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+    .plan-actions button { flex: 1; min-width: 0; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -187,6 +200,20 @@
   <div class="fo-content"><pre id="fo-content"></pre></div>
 </div>
 <div id="img-overlay" onclick="closeImageOverlay()"><img id="img-overlay-src" src="" alt=""></div>
+<div id="plan-overlay">
+  <div class="plan-header">
+    <span class="plan-title">📋 Plan</span>
+    <button class="fo-close" onclick="closePlanOverlay()">✕</button>
+  </div>
+  <div class="plan-body">
+    <div class="plan-text" id="plan-text"></div>
+    <textarea id="plan-refine" placeholder="Tell Claude what to change…" rows="3"></textarea>
+  </div>
+  <div class="plan-actions">
+    <button id="plan-refine-btn" onclick="refinePlan()">Refine</button>
+    <button class="secondary" onclick="acceptPlan()">Accept</button>
+  </div>
+</div>
 <div id="rate-limit-banner">
   <div class="rl-title">⏳ Claude Usage Limit Reached</div>
   <div class="rl-countdown" id="rl-countdown">—</div>
@@ -283,6 +310,7 @@
     <textarea id="prompt" placeholder="Ask Claude to do something…" rows="3"></textarea>
     <div class="form-row">
       <button id="send-btn" onclick="sendPrompt()">Send →</button>
+      <button class="secondary" id="plan-btn" onclick="planPrompt()">Plan</button>
       <div class="spinner" id="spinner"></div>
       <div class="extras-anchor">
         <button class="secondary" id="extras-btn" onclick="toggleExtras()" title="Options" style="padding:8px 10px;font-size:15px;line-height:1">⚙</button>
@@ -664,8 +692,6 @@ async function sendPrompt() {
   const turns = histList.querySelectorAll('.chat-turn').length;
   countEl.textContent = turns ? `${turns} turn${turns !== 1 ? 's' : ''}` : '';
 
-  // Switch to Feed so the user sees live activity
-  switchView('feed');
   addFeedItem('status', 'Prompt', prompt.length > 100 ? prompt.slice(0, 100) + '…' : prompt);
 
   telemetry('prompt_sent', { prompt_len: prompt.length, model: _model, agent_id: _agentId });
@@ -713,6 +739,141 @@ async function sendPrompt() {
   } finally {
     btn.disabled = false;
     spinner.style.display = 'none';
+  }
+}
+
+// ── Plan mode ─────────────────────────────────────────────────────────────────
+let _planOrigPrompt = '';
+
+async function planPrompt() {
+  const textarea = document.getElementById('prompt');
+  const prompt = textarea.value.trim();
+  if (!prompt) return;
+
+  const sendBtn = document.getElementById('send-btn');
+  const planBtn = document.getElementById('plan-btn');
+  const spinner = document.getElementById('spinner');
+  sendBtn.disabled = true; planBtn.disabled = true;
+  spinner.style.display = 'block';
+  setStatus('working');
+  _planOrigPrompt = prompt;
+  textarea.value = '';
+
+  const histList = document.getElementById('history-list');
+  if (histList.querySelector('.history-empty')) histList.innerHTML = '';
+  const userDiv = document.createElement('div');
+  userDiv.className = 'chat-turn';
+  userDiv.innerHTML = `<div class="chat-user">
+    <div class="chat-bubble">${escHtml(prompt)}</div>
+    <div class="chat-meta">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+  </div>`;
+  histList.appendChild(userDiv);
+  histList.scrollTop = histList.scrollHeight;
+  const countEl = document.getElementById('history-count');
+  const turns = histList.querySelectorAll('.chat-turn').length;
+  countEl.textContent = turns ? `${turns} turn${turns !== 1 ? 's' : ''}` : '';
+
+  let planText = '';
+
+  try {
+    const resp = await fetch('/task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, agent_id: _agentId, model: _model, plan_mode: true }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let event; try { event = JSON.parse(line.slice(6)); } catch { continue; }
+        if (event.type === 'text') planText += (planText ? '\n\n' : '') + event.content;
+        if (event.type === 'done' && !planText) planText = event.result || '(no plan returned)';
+        if (event.type === 'error') throw new Error(event.message);
+      }
+    }
+    setStatus('live');
+    showPlanOverlay(planText);
+  } catch (err) {
+    setStatus('error');
+    showToast('Plan failed: ' + err.message);
+  } finally {
+    sendBtn.disabled = false; planBtn.disabled = false;
+    spinner.style.display = 'none';
+  }
+}
+
+function showPlanOverlay(planText) {
+  document.getElementById('plan-text').textContent = planText;
+  document.getElementById('plan-refine').value = '';
+  document.getElementById('plan-overlay').classList.add('open');
+}
+
+function closePlanOverlay() {
+  document.getElementById('plan-overlay').classList.remove('open');
+  const promptEl = document.getElementById('prompt');
+  if (!promptEl.value.trim()) promptEl.value = _planOrigPrompt;
+}
+
+function acceptPlan() {
+  document.getElementById('plan-overlay').classList.remove('open');
+  document.getElementById('prompt').value = _planOrigPrompt;
+  sendPrompt();
+}
+
+async function refinePlan() {
+  const feedback = document.getElementById('plan-refine').value.trim();
+  if (!feedback) return;
+
+  const refineBtn = document.getElementById('plan-refine-btn');
+  refineBtn.disabled = true;
+  refineBtn.textContent = '…';
+
+  const currentPlan = document.getElementById('plan-text').textContent;
+  const metaPrompt = `Here is my current plan:\n\n${currentPlan}\n\nFeedback: ${feedback}\n\nPlease update the plan based on this feedback.`;
+
+  let newPlanText = '';
+  try {
+    const resp = await fetch('/task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: metaPrompt, agent_id: _agentId, model: _model, plan_mode: true }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let event; try { event = JSON.parse(line.slice(6)); } catch { continue; }
+        if (event.type === 'text') newPlanText += (newPlanText ? '\n\n' : '') + event.content;
+        if (event.type === 'done' && !newPlanText) newPlanText = event.result || '';
+        if (event.type === 'error') throw new Error(event.message);
+      }
+    }
+    if (newPlanText) {
+      document.getElementById('plan-text').textContent = newPlanText;
+      document.getElementById('plan-refine').value = '';
+    }
+  } catch (err) {
+    showToast('Refine failed: ' + err.message);
+  } finally {
+    refineBtn.disabled = false;
+    refineBtn.textContent = 'Refine';
   }
 }
 

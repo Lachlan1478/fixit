@@ -54,6 +54,7 @@ class TaskRequest(BaseModel):
     prompt: str
     agent_id: str = "default"
     model: str = "sonnet"  # haiku | sonnet | opus
+    plan_mode: bool = False
 
 
 class ResetMemoryRequest(BaseModel):
@@ -73,7 +74,7 @@ async def run_task(request: TaskRequest):
         event_count = 0
         logger.info("Request | agent=%s prompt=%r", agent_id, request.prompt[:60])
         try:
-            async for event in cs.stream_task(request.prompt, agent_id, request.model):
+            async for event in cs.stream_task(request.prompt, agent_id, request.model, request.plan_mode):
                 event_count += 1
                 if event.get("type") == "rate_limited":
                     reset_at_str = event.get("reset_at")

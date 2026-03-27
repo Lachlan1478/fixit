@@ -149,7 +149,7 @@ def _summarise_tool(name: str, inp: dict) -> str:
 
 # ── Main streaming function ───────────────────────────────────────────────────
 
-async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet") -> AsyncIterator[dict]:
+async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet", plan_mode: bool = False) -> AsyncIterator[dict]:
     """
     Run Claude Code non-interactively and yield UI-ready events:
 
@@ -159,8 +159,9 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
       {"type": "error", "message": str}
 
     Conversation history is maintained automatically via --resume <session_id>.
+    plan_mode=True adds --plan flag and skips session persistence.
     """
-    session_id = _agent_sessions.get(agent_id)
+    session_id = None if plan_mode else _agent_sessions.get(agent_id)
     is_resume = session_id is not None
     task_start_ms = _now_ms()
     task_start_ts = _now_iso()
@@ -176,6 +177,15 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
     ]
     if session_id:
         cmd += ["--resume", session_id]
+
+    if plan_mode:
+        prompt = (
+            "PLAN MODE: Do NOT write any files, run any commands, or make any changes. "
+            "Do NOT use Write, Edit, MultiEdit, or Bash tools under any circumstances. "
+            "You may use Read, Glob, and Grep only if you need to understand the codebase. "
+            "Respond with a detailed step-by-step implementation plan as plain text, then stop.\n\n"
+            f"Task: {prompt}"
+        )
 
     logger.info(
         "Task start | agent=%s session=%s resume=%s prompt=%r",
@@ -257,8 +267,8 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         event_type = event.get("type")
         elapsed_ms = round(_now_ms() - task_start_ms, 1)
 
-        # Save session_id for future --resume
-        if "session_id" in event and event["session_id"]:
+        # Save session_id for future --resume (skip in plan mode — keeps context clean)
+        if not plan_mode and "session_id" in event and event["session_id"]:
             new_sid = event["session_id"]
             if new_sid != session_id:
                 _agent_sessions[agent_id] = new_sid
@@ -532,11 +542,12 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
     # Persist to analytics DB (best-effort, non-blocking)
     analytics.record_session(session_summary, _tool_analytics)
 
-    # Append to in-memory conversation history
-    turns = _conversation_history.setdefault(agent_id, [])
-    turns.append({"role": "user", "content": prompt, "ts": task_start_ts})
-    if result_text:
-        turns.append({"role": "assistant", "content": result_text, "ts": _now_iso(), "model": model_id})
+    # Append to in-memory conversation history (skip for plan mode)
+    if not plan_mode:
+        turns = _conversation_history.setdefault(agent_id, [])
+        turns.append({"role": "user", "content": prompt, "ts": task_start_ts})
+        if result_text:
+            turns.append({"role": "assistant", "content": result_text, "ts": _now_iso(), "model": model_id})
 
     logger.info(
         "Task done | agent=%s total_ms=%.0f tools=%d turns=%s cost=$%.4f exit=%s",
