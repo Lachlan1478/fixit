@@ -239,7 +239,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         "event": "task_start",
         "session_id": session_id,
         "is_resume": is_resume,
-        "prompt_snippet": prompt[:120],
+        "prompt": prompt,
         "prompt_len": len(prompt),
         "spawn_ms": round(spawn_ms, 1),
     })
@@ -312,7 +312,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                     tool_entry = {
                         "name": name,
                         "summary": summary,
-                        "input_snippet": str(inp)[:200],
+                        "input": inp,
                         "tool_use_id": tool_use_id,
                         "elapsed_ms": elapsed_ms,
                     }
@@ -324,7 +324,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                         "ts": _now_iso(),
                         "name": name,
                         "elapsed_ms": elapsed_ms,
-                        "input_snippet": str(inp)[:200],
+                        "input": inp,
                         "tool_use_id": tool_use_id,
                         "exec_ms": None,
                         "is_error": False,
@@ -370,7 +370,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                         _write_jsonl("events.jsonl", {
                             "ts": _now_iso(), "agent_id": agent_id,
                             "event": "text_block",
-                            "snippet": text[:120],
+                            "text": text,
                             "length": len(text),
                             "elapsed_ms": elapsed_ms,
                         })
@@ -392,7 +392,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                     tool_use_id = block.get("tool_use_id", "")
                     is_error = block.get("is_error", False)
                     result_content = block.get("content", "")
-                    result_snippet = str(result_content)[:120] if result_content else ""
+                    result_content_full = result_content if result_content else ""
 
                     exec_ms = None
                     if tool_use_id in last_tool_call_ts:
@@ -416,7 +416,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                         "tool_use_id": tool_use_id,
                         "tool_name": tool_name,
                         "is_error": is_error,
-                        "result_snippet": result_snippet,
+                        "result_content": result_content_full,
                         "exec_ms": exec_ms,
                         "elapsed_ms": elapsed_ms,
                     })
@@ -508,7 +508,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         "agent_id": agent_id,
         "session_id": session_id,
         "is_resume": is_resume,
-        "prompt_snippet": prompt[:120],
+        "prompt": prompt,
         "prompt_len": len(prompt),
         # Timing
         "total_ms": total_ms,
@@ -523,7 +523,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         "tool_calls": tool_calls,
         # Output
         "result_len": len(result_text),
-        "result_snippet": result_text[:120],
+        "result": result_text,
         "text_block_count": len(text_blocks),
         "num_turns": num_turns,
         # Cost / tokens
