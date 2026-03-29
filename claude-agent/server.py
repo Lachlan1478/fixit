@@ -53,7 +53,7 @@ async def root():
 class TaskRequest(BaseModel):
     prompt: str
     agent_id: str = "default"
-    model: str = "sonnet"  # haiku | sonnet | opus
+    model: str = "opus"  # haiku | sonnet | opus
     plan_mode: bool = False
 
 
@@ -241,6 +241,20 @@ async def get_image(path: str):
     if ext not in _IMAGE_MIMETYPES:
         raise HTTPException(status_code=400, detail="Not an image file")
     return FileResponse(abs_path, media_type=_IMAGE_MIMETYPES[ext])
+
+
+@app.get("/serve")
+async def serve_raw(path: str):
+    """Serve a workspace file with correct Content-Type (for iframe preview)."""
+    if os.path.isabs(path):
+        abs_path = os.path.normpath(path)
+    else:
+        abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
+    if not (abs_path.startswith(WORKSPACE_ROOT + os.sep) or abs_path == WORKSPACE_ROOT):
+        raise HTTPException(status_code=403, detail="Path outside workspace")
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(abs_path)
 
 
 @app.get("/analytics")

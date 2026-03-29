@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Assembly × Claude</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0f0f11;
+  --surface:  #1a1a1f;
+  --surface2: #242429;
+  --border:   #2e2e36;
+  --accent:   #7c6af7;
+  --accent2:  #a78bfa;
+  --green:    #22c55e;
+  --red:      #ef4444;
+  --yellow:   #eab308;
+  --text:     #e8e8f0;
+  --muted:    #7a7a90;
+  --pass:     #22c55e;
+  --iterate:  #eab308;
+  --human:    #f97316;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 13px; }
+
+/* ── Layout ── */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+  transition: background 0.3s;
+}
+.status-dot.idle     { background: var(--muted); }
+.status-dot.ideating { background: var(--accent); animation: pulse 1.4s infinite; }
+.status-dot.building { background: var(--yellow); animation: pulse 1.4s infinite; }
+.status-dot.reviewing{ background: var(--accent2); animation: pulse 1.4s infinite; }
+.status-dot.complete { background: var(--green); }
+.status-dot.error    { background: var(--red); }
+.status-dot.awaiting_human { background: var(--human); animation: pulse 1.4s infinite; }
+.status-dot.spec_review { background: var(--yellow); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+#state-label { font-size: 11px; color: var(--muted); }
+#session-id  { font-size: 10px; color: var(--border); margin-left: auto; }
+
+/* ── Tabs (mobile) ── */
+.tab-bar {
+  display: none;
+  background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.tab-bar button {
+  flex: 1; padding: 10px 4px; background: none; border: none; color: var(--muted);
+  font-family: inherit; font-size: 11px; cursor: pointer; border-bottom: 2px solid transparent;
+}
+.tab-bar button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── 4-panel grid ── */
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.5fr 1fr;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+.panel {
+  display: flex; flex-direction: column; border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.panel:last-child { border-right: none; }
+.panel-header {
+  padding: 8px 12px; background: var(--surface2);
+  border-bottom: 1px solid var(--border); font-size: 11px;
+  font-weight: 600; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .05em; flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+}
+.panel-body { flex: 1; overflow-y: auto; padding: 10px; }
+
+/* ── Footer ── */
+footer {
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 12px 16px; flex-shrink: 0;
+}
+.footer-top { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+.footer-top label { font-size: 11px; color: var(--muted); }
+#problem-input {
+  width: 100%; background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 6px; padding: 8px 10px;
+  font-family: inherit; font-size: 13px; resize: vertical; min-height: 60px;
+  margin-bottom: 8px;
+}
+#problem-input:focus { outline: none; border-color: var(--accent); }
+select, .btn {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 5px; padding: 6px 12px; font-family: inherit; font-size: 12px; cursor: pointer;
+}
+select:focus, .btn:focus { outline: none; border-color: var(--accent); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn-primary:hover { background: var(--accent2); border-color: var(--accent2); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+.btn-green { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+.btn-green:hover { background: var(--green); }
+.btn-orange { background: #c2410c; border-color: #c2410c; color: #fff; font-weight: 600; }
+
+/* ── Human input banner ── */
+#human-banner {
+  display: none; background: #7c2d12; border: 1px solid var(--human);
+  border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
+}
+#human-banner p { color: #fed7aa; font-size: 12px; margin-bottom: 6px; }
+#human-input { width: 100%; background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 5px; padding: 6px 10px; font-family: inherit;
+  font-size: 12px; margin-bottom: 6px; }
+#human-input:focus { outline: none; border-color: var(--human); }
+
+/* ── Assembly messages (Panel A) ── */
+.assembly-msg {
+  margin-bottom: 10px; animation: slideIn .2s ease;
+}
+.assembly-msg .speaker {
+  font-size: 10px; font-weight: 600; color: var(--accent2); margin-bottom: 2px;
+}
+.assembly-msg .archetype {
+  font-size: 9px; color: var(--muted); margin-bottom: 3px;
+}
+.assembly-msg .content {
+  color: var(--text); font-size: 12px; line-height: 1.5;
+  background: var(--surface2); border-radius: 5px; padding: 6px 8px;
+}
+.assembly-msg.mediator .speaker { color: var(--yellow); }
+.phase-divider {
+  text-align: center; color: var(--muted); font-size: 10px;
+  padding: 6px 0; letter-spacing: .06em; text-transform: uppercase;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  margin: 8px 0;
+}
+.idea-pill {
+  display: inline-block; background: #1e1b4b; border: 1px solid var(--accent);
+  border-radius: 12px; padding: 2px 8px; font-size: 10px; color: var(--accent2); margin: 2px;
+}
+
+/* ── Spec panel (Panel B) ── */
+.spec-card { background: var(--surface2); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+.spec-card h2 { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.spec-card .pitch { color: var(--accent2); font-size: 12px; margin-bottom: 10px; font-style: italic; }
+.spec-section { margin-bottom: 8px; }
+.spec-section .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 3px; }
+.spec-section .value { font-size: 12px; color: var(--text); }
+.spec-section ul { padding-left: 16px; }
+.spec-section li { font-size: 12px; color: var(--text); margin-bottom: 2px; }
+#approve-btn { width: 100%; margin-top: 8px; padding: 10px; }
+#spec-placeholder { color: var(--muted); font-size: 12px; text-align: center; padding: 40px 20px; }
+
+/* ── Claude feed (Panel C) ── */
+.feed-item { margin-bottom: 8px; animation: slideIn .2s ease; }
+.feed-item .fi-label {
+  font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px;
+  display: inline-block; margin-bottom: 3px;
+}
+.fi-tool  .fi-label { background: #312e81; color: var(--accent2); }
+.fi-text  .fi-label { background: var(--surface2); color: var(--muted); }
+.fi-done  .fi-label { background: #14532d; color: var(--green); }
+.fi-error .fi-label { background: #450a0a; color: var(--red); }
+.fi-status .fi-label { background: var(--surface2); color: var(--muted); }
+.fi-image .fi-label { background: #1a1a2e; color: var(--accent); }
+.feed-item .fi-body { font-size: 12px; color: var(--muted); line-height: 1.4; padding: 4px 6px; }
+.fi-text .fi-body, .fi-done .fi-body { color: var(--text); }
+.fi-image img { max-width: 100%; border-radius: 4px; margin-top: 4px; cursor: zoom-in; }
+.todo-list { list-style: none; padding: 4px; }
+.todo-list li { font-size: 11px; padding: 2px 0; display: flex; align-items: center; gap: 5px; }
+.todo-list li.done { color: var(--green); }
+.todo-list li.pending { color: var(--muted); }
+.iteration-badge {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 8px; font-size: 10px; color: var(--muted);
+  margin-bottom: 8px; text-align: center;
+}
+
+/* ── Reviewer panel (Panel D) ── */
+.reviewer-card { background: var(--surface2); border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+.reviewer-card .rc-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.reviewer-card .rc-name { font-size: 11px; font-weight: 600; color: var(--text); }
+.verdict-badge { font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: 600; }
+.verdict-pass     { background: #14532d; color: var(--pass); }
+.verdict-iterate  { background: #713f12; color: var(--iterate); }
+.verdict-human_needed { background: #431407; color: var(--human); }
+.verdict-pending  { background: var(--surface); color: var(--muted); }
+.reviewer-card .rc-reasoning { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.reviewer-card .rc-followup { font-size: 11px; color: var(--text); font-style: italic; }
+.aggregate-block {
+  border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+  margin-bottom: 10px; text-align: center;
+}
+.aggregate-block .agg-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+.aggregate-block .agg-verdict { font-size: 18px; font-weight: 700; }
+.agg-pass { color: var(--pass); }
+.agg-iterate { color: var(--iterate); }
+.agg-human_needed { color: var(--human); }
+#reviewer-placeholder { color: var(--muted); font-size: 12px; text-align: center; padding: 40px 20px; }
+
+@keyframes slideIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── Lightbox ── */
+#lightbox {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85);
+  z-index: 1000; align-items: center; justify-content: center; cursor: zoom-out;
+}
+#lightbox.open { display: flex; }
+#lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+
+/* ── Mobile ── */
+@media (max-width: 800px) {
+  .tab-bar { display: flex; }
+  .panels { grid-template-columns: 1fr; }
+  .panel { display: none; }
+  .panel.active { display: flex; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="status-dot idle" id="status-dot"></div>
+    <h1>Assembly × Claude</h1>
+    <span id="state-label">idle</span>
+    <span id="session-id"></span>
+  </header>
+
+  <!-- Tab bar (mobile only) -->
+  <div class="tab-bar">
+    <button class="active" onclick="switchTab(0)">Ideation</button>
+    <button onclick="switchTab(1)">Spec</button>
+    <button onclick="switchTab(2)">Build</button>
+    <button onclick="switchTab(3)">Review</button>
+  </div>
+
+  <!-- 4-panel grid -->
+  <div class="panels">
+
+    <!-- Panel A: Ideation -->
+    <div class="panel active" id="panel-0">
+      <div class="panel-header">
+        <span>Ideation</span>
+        <span id="phase-label" style="color:var(--accent);font-size:10px;"></span>
+      </div>
+      <div class="panel-body" id="assembly-feed">
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 20px;">
+          Assembly personas will appear here during ideation.
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel B: Spec -->
+    <div class="panel active" id="panel-1">
+      <div class="panel-header">Spec</div>
+      <div class="panel-body" id="spec-panel">
+        <div id="spec-placeholder">Solution spec will appear here once Assembly finishes.</div>
+      </div>
+    </div>
+
+    <!-- Panel C: Claude Feed -->
+    <div class="panel active" id="panel-2">
+      <div class="panel-header">
+        <span>Claude Build</span>
+        <span id="iter-label" style="color:var(--muted);font-size:10px;margin-left:auto;"></span>
+      </div>
+      <div class="panel-body" id="claude-feed">
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 20px;">
+          Claude's execution feed will stream here.
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel D: Reviewer -->
+    <div class="panel active" id="panel-3">
+      <div class="panel-header">Reviewer</div>
+      <div class="panel-body" id="reviewer-panel">
+        <div id="reviewer-placeholder">Reviewer verdicts will appear here after each build.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <!-- Human input banner (shown when AWAITING_HUMAN) -->
+    <div id="human-banner">
+      <p id="human-reason">Reviewer needs your input.</p>
+      <input id="human-input" type="text" placeholder="Type your guidance for Claude..." />
+      <button class="btn btn-orange" onclick="sendHumanInput()">Send Guidance</button>
+    </div>
+
+    <!-- Problem input -->
+    <textarea id="problem-input" placeholder="Describe the problem or product you want to build...&#10;&#10;E.g. 'A habit tracker with daily streaks and a minimal dark UI'"></textarea>
+
+    <!-- Controls -->
+    <div class="footer-top">
+      <label>Mode</label>
+      <select id="mode-select">
+        <option value="fast">Fast (quick)</option>
+        <option value="medium" selected>Medium (balanced)</option>
+        <option value="standard">Standard (thorough)</option>
+        <option value="deep">Deep (exhaustive)</option>
+      </select>
+
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="auto-approve" style="cursor:pointer;" />
+        Auto-approve spec
+      </label>
+
+      <button class="btn btn-primary" id="start-btn" onclick="startPipeline()">Start Pipeline</button>
+    </div>
+  </footer>
+
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" onclick="closeLightbox()">
+  <img id="lightbox-img" src="" alt="screenshot" />
+</div>
+
+<script>
+'use strict';
+
+let _sessionId = null;
+let _evtSource = null;
+let _state = 'idle';
+const _reviewers = {};  // name → card element
+
+// ── Tab switching (mobile) ────────────────────────────────────────────────────
+function switchTab(idx) {
+  document.querySelectorAll('.panel').forEach((p, i) => p.classList.toggle('active', i === idx));
+  document.querySelectorAll('.tab-bar button').forEach((b, i) => b.classList.toggle('active', i === idx));
+}
+
+// ── Start pipeline ────────────────────────────────────────────────────────────
+async function startPipeline() {
+  const problem = document.getElementById('problem-input').value.trim();
+  if (!problem) { alert('Please describe your problem first.'); return; }
+
+  const mode = document.getElementById('mode-select').value;
+  const autoApprove = document.getElementById('auto-approve').checked;
+
+  document.getElementById('start-btn').disabled = true;
+
+  try {
+    const res = await fetch('/pipeline/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({problem, mode, auto_approve_spec: autoApprove}),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert('Error: ' + (err.detail || res.statusText));
+      document.getElementById('start-btn').disabled = false;
+      return;
+    }
+    const data = await res.json();
+    _sessionId = data.session_id;
+    document.getElementById('session-id').textContent = `#${_sessionId}`;
+
+    // Clear panels
+    clearPanels();
+    connectSSE();
+  } catch (e) {
+    alert('Failed to start: ' + e.message);
+    document.getElementById('start-btn').disabled = false;
+  }
+}
+
+function clearPanels() {
+  document.getElementById('assembly-feed').innerHTML = '';
+  document.getElementById('spec-panel').innerHTML = '<div id="spec-placeholder">Waiting for spec...</div>';
+  document.getElementById('claude-feed').innerHTML = '';
+  document.getElementById('reviewer-panel').innerHTML = '<div id="reviewer-placeholder">Waiting for review...</div>';
+  document.getElementById('human-banner').style.display = 'none';
+  Object.keys(_reviewers).forEach(k => delete _reviewers[k]);
+}
+
+// ── SSE connection ────────────────────────────────────────────────────────────
+function connectSSE() {
+  if (_evtSource) _evtSource.close();
+  _evtSource = new EventSource(`/pipeline/stream/${_sessionId}`);
+
+  _evtSource.onmessage = e => {
+    try { handleEvent(JSON.parse(e.data)); } catch(ex) { console.error(ex); }
+  };
+  _evtSource.onerror = () => {
+    // Auto-reconnect if pipeline is still running
+    if (_state !== 'complete' && _state !== 'error') {
+      setTimeout(connectSSE, 3000);
+    }
+  };
+}
+
+// ── Event router ──────────────────────────────────────────────────────────────
+function handleEvent(ev) {
+  switch (ev.type) {
+
+    case 'state_change':
+      setStatus(ev.new);
+      break;
+
+    // Assembly events ──────────────────────────────────────────────────────────
+    case 'message':
+      addAssemblyMessage(ev.speaker, ev.archetype, ev.content, false);
+      break;
+    case 'phase_start':
+      addPhaseDivider(ev.goal || ev.phase_id);
+      document.getElementById('phase-label').textContent = ev.phase_id || '';
+      break;
+    case 'phase_complete':
+      addPhaseDivider(`✓ ${ev.phase_id}`);
+      break;
+    case 'mediator_intervention':
+      addAssemblyMessage(ev.speaker || 'Mediator', 'Socratic Mediator', ev.content, true);
+      break;
+    case 'idea_tracked':
+      addIdeaPill(ev.title, ev.status);
+      break;
+
+    // Spec ready ───────────────────────────────────────────────────────────────
+    case 'spec_ready':
+      renderSpec(ev.spec);
+      break;
+
+    // Build events ─────────────────────────────────────────────────────────────
+    case 'build_start':
+      document.getElementById('iter-label').textContent = `Iteration ${ev.iteration}`;
+      addClaudeFeedItem('status', `Build iteration ${ev.iteration} started`, '');
+      break;
+    case 'claude_feed':
+      handleClaudeEvent(ev.event);
+      break;
+
+    // Reviewer events ──────────────────────────────────────────────────────────
+    case 'review_result':
+      upsertReviewerCard(ev.persona, ev.verdict, ev.reasoning, ev.follow_up);
+      break;
+    case 'aggregate_verdict':
+      setAggregateVerdict(ev.verdict, ev.follow_up_prompt, ev.iteration);
+      break;
+
+    // Pivotal moments ──────────────────────────────────────────────────────────
+    case 'pivotal_moment':
+      if (ev.moment === 'human_input_needed' || ev.moment === 'max_iterations_hit') {
+        showHumanBanner(ev.message);
+      }
+      break;
+
+    // Terminal ─────────────────────────────────────────────────────────────────
+    case 'pipeline_complete':
+      setStatus('complete');
+      addClaudeFeedItem('done', 'Pipeline complete!', '');
+      document.getElementById('start-btn').disabled = false;
+      if (_evtSource) { _evtSource.close(); _evtSource = null; }
+      break;
+    case 'error':
+      setStatus('error');
+      addClaudeFeedItem('error', 'Error', ev.message);
+      document.getElementById('start-btn').disabled = false;
+      if (_evtSource) { _evtSource.close(); _evtSource = null; }
+      break;
+  }
+}
+
+// ── Claude feed events ────────────────────────────────────────────────────────
+function handleClaudeEvent(ev) {
+  if (!ev) return;
+  switch (ev.type) {
+    case 'tool':
+      addClaudeFeedItem('tool', ev.name, ev.summary || '');
+      break;
+    case 'tool_result':
+      if (ev.is_error) addClaudeFeedItem('error', ev.name, ev.content);
+      break;
+    case 'text':
+      addClaudeFeedItem('text', 'Thinking', ev.content);
+      break;
+    case 'done':
+      addClaudeFeedItem('done', 'Done', ev.result);
+      break;
+    case 'error':
+      addClaudeFeedItem('error', 'Error', ev.message);
+      break;
+    case 'todos': {
+      const list = document.createElement('ul');
+      list.className = 'todo-list';
+      (ev.items || []).forEach(item => {
+        const li = document.createElement('li');
+        li.className = item.status === 'completed' ? 'done' : 'pending';
+        li.textContent = (item.status === 'completed' ? '✓ ' : '○ ') + item.content;
+        list.appendChild(li);
+      });
+      const feed = document.getElementById('claude-feed');
+      feed.appendChild(list);
+      feed.scrollTop = feed.scrollHeight;
+      break;
+    }
+    case 'image': {
+      const img = document.createElement('img');
+      img.src = ev.url;
+      img.style.maxWidth = '100%';
+      img.style.borderRadius = '4px';
+      img.style.cursor = 'zoom-in';
+      img.onclick = () => openLightbox(ev.url);
+      const wrap = document.createElement('div');
+      wrap.className = 'feed-item fi-image';
+      const lbl = document.createElement('div');
+      lbl.className = 'fi-label';
+      lbl.textContent = 'Screenshot';
+      wrap.appendChild(lbl);
+      wrap.appendChild(img);
+      const feed = document.getElementById('claude-feed');
+      feed.appendChild(wrap);
+      feed.scrollTop = feed.scrollHeight;
+      break;
+    }
+    case 'status':
+      addClaudeFeedItem('status', 'Status', ev.message);
+      break;
+  }
+}
+
+function addClaudeFeedItem(type, label, body) {
+  const feed = document.getElementById('claude-feed');
+  const div = document.createElement('div');
+  div.className = `feed-item fi-${type}`;
+  div.innerHTML = `<div class="fi-label">${esc(label)}</div>` +
+    (body ? `<div class="fi-body">${esc(body).slice(0, 600)}</div>` : '');
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ── Assembly feed ─────────────────────────────────────────────────────────────
+function addAssemblyMessage(speaker, archetype, content, isMediator) {
+  const feed = document.getElementById('assembly-feed');
+  const div = document.createElement('div');
+  div.className = 'assembly-msg' + (isMediator ? ' mediator' : '');
+  div.innerHTML = `
+    <div class="speaker">${esc(speaker)}</div>
+    <div class="archetype">${esc(archetype || '')}</div>
+    <div class="content">${esc(content)}</div>
+  `;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function addPhaseDivider(label) {
+  const feed = document.getElementById('assembly-feed');
+  const div = document.createElement('div');
+  div.className = 'phase-divider';
+  div.textContent = label;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function addIdeaPill(title, status) {
+  const feed = document.getElementById('assembly-feed');
+  const pill = document.createElement('span');
+  pill.className = 'idea-pill';
+  pill.textContent = `💡 ${title}`;
+  if (status === 'rejected') pill.style.opacity = '0.5';
+  feed.appendChild(pill);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ── Spec panel ────────────────────────────────────────────────────────────────
+function renderSpec(spec) {
+  if (!spec) return;
+  const panel = document.getElementById('spec-panel');
+  const approveEnabled = _state === 'spec_review';
+
+  panel.innerHTML = `
+    <div class="spec-card">
+      <h2>${esc(spec.product_name || 'Product')}</h2>
+      <div class="pitch">${esc(spec.one_sentence_pitch || '')}</div>
+
+      <div class="spec-section">
+        <div class="label">Target User</div>
+        <div class="value">${esc(spec.target_user_icp || '')}</div>
+      </div>
+
+      <div class="spec-section">
+        <div class="label">MVP Features</div>
+        <ul>${(spec.mvp_bullets||[]).map(b=>`<li>${esc(b)}</li>`).join('')}</ul>
+      </div>
+
+      ${spec.monetization_model ? `
+      <div class="spec-section">
+        <div class="label">Monetization</div>
+        <div class="value">${esc(spec.monetization_model)}</div>
+      </div>` : ''}
+
+      ${spec.key_differentiator ? `
+      <div class="spec-section">
+        <div class="label">Differentiator</div>
+        <div class="value">${esc(spec.key_differentiator)}</div>
+      </div>` : ''}
+
+      ${(spec.what_we_are_not_doing||[]).length ? `
+      <div class="spec-section">
+        <div class="label">Out of scope</div>
+        <ul>${spec.what_we_are_not_doing.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>
+      </div>` : ''}
+
+      ${(spec.risks_unknowns||[]).length ? `
+      <div class="spec-section">
+        <div class="label">Risks</div>
+        <ul>${spec.risks_unknowns.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>
+      </div>` : ''}
+
+      <button id="approve-btn" class="btn btn-green ${approveEnabled?'':'hidden'}"
+        onclick="approveSpec()" ${approveEnabled?'':'style="display:none"'}>
+        Approve Spec &amp; Build
+      </button>
+    </div>
+  `;
+  // Store spec on window for approval
+  window._pendingSpec = spec;
+}
+
+async function approveSpec() {
+  if (!_sessionId) return;
+  document.getElementById('approve-btn').disabled = true;
+  try {
+    const res = await fetch(`/pipeline/${_sessionId}/approve_spec`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spec: window._pendingSpec || null}),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert('Error: ' + (err.detail || res.statusText));
+      document.getElementById('approve-btn').disabled = false;
+    }
+  } catch(e) {
+    alert('Failed: ' + e.message);
+    document.getElementById('approve-btn').disabled = false;
+  }
+}
+
+// ── Reviewer panel ────────────────────────────────────────────────────────────
+function upsertReviewerCard(persona, verdict, reasoning, followUp) {
+  // Remove placeholder
+  const ph = document.getElementById('reviewer-placeholder');
+  if (ph) ph.remove();
+
+  const panel = document.getElementById('reviewer-panel');
+  let card = _reviewers[persona];
+
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'reviewer-card';
+    panel.insertBefore(card, panel.querySelector('.aggregate-block'));
+    _reviewers[persona] = card;
+  }
+
+  card.innerHTML = `
+    <div class="rc-header">
+      <span class="rc-name">${esc(persona)}</span>
+      <span class="verdict-badge verdict-${verdict||'pending'}">${verdict||'pending'}</span>
+    </div>
+    <div class="rc-reasoning">${esc(reasoning||'')}</div>
+    ${followUp ? `<div class="rc-followup">→ ${esc(followUp)}</div>` : ''}
+  `;
+}
+
+function setAggregateVerdict(verdict, followUpPrompt, iteration) {
+  const panel = document.getElementById('reviewer-panel');
+  let agg = panel.querySelector('.aggregate-block');
+  if (!agg) {
+    agg = document.createElement('div');
+    agg.className = 'aggregate-block';
+    panel.insertBefore(agg, panel.firstChild);
+  }
+  agg.innerHTML = `
+    <div class="agg-label">Iteration ${iteration} — Aggregate Verdict</div>
+    <div class="agg-verdict agg-${verdict}">${verdict.toUpperCase()}</div>
+    ${followUpPrompt ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;">${esc(followUpPrompt.slice(0,200))}</div>` : ''}
+  `;
+}
+
+// ── Human input ───────────────────────────────────────────────────────────────
+function showHumanBanner(reason) {
+  const banner = document.getElementById('human-banner');
+  banner.style.display = 'block';
+  document.getElementById('human-reason').textContent = reason || 'Reviewer needs your input.';
+  // Switch to build tab on mobile
+  switchTab(2);
+}
+
+async function sendHumanInput() {
+  const msg = document.getElementById('human-input').value.trim();
+  if (!msg) { alert('Please type your guidance.'); return; }
+  if (!_sessionId) return;
+
+  try {
+    const res = await fetch(`/pipeline/${_sessionId}/human_input`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: msg}),
+    });
+    if (res.ok) {
+      document.getElementById('human-banner').style.display = 'none';
+      document.getElementById('human-input').value = '';
+    } else {
+      const err = await res.json();
+      alert('Error: ' + (err.detail || res.statusText));
+    }
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  }
+}
+
+// ── Status ────────────────────────────────────────────────────────────────────
+function setStatus(state) {
+  _state = state;
+  const dot = document.getElementById('status-dot');
+  dot.className = `status-dot ${state}`;
+  document.getElementById('state-label').textContent = state.replace('_', ' ');
+
+  // Show approve button when spec_review
+  const approveBtn = document.getElementById('approve-btn');
+  if (approveBtn) approveBtn.style.display = state === 'spec_review' ? '' : 'none';
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/\n/g,'<br>');
+}
+
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+</script>
+</body>
+</html>

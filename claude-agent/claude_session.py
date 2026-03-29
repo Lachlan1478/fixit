@@ -473,6 +473,14 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
                     yield {"type": "error", "message": result_text}
             else:
                 yield {"type": "done", "result": result_text}
+                if total_cost_usd is not None or usage:
+                    yield {
+                        "type": "usage",
+                        "total_cost_usd": total_cost_usd,
+                        "input_tokens": usage.get("input_tokens"),
+                        "output_tokens": usage.get("output_tokens"),
+                        "num_turns": num_turns,
+                    }
 
     # ── Post-stream ───────────────────────────────────────────────────────
     stderr_bytes = await proc.stderr.read()
