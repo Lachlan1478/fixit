@@ -220,6 +220,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=WORKSPACE_ROOT,
+            limit=10 * 1024 * 1024,  # 10 MB — Claude's stream-json lines can exceed the 64 KB default
         )
     except FileNotFoundError:
         err_event = {"type": "error", "message": "claude CLI not found — is Claude Code installed?"}

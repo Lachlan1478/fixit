@@ -1,6 +1,7 @@
 """
-reviewer.py — Three Anthropic-powered reviewer personas that analyse each
-Claude Code build and return a structured verdict.
+reviewer.py — Three reviewer personas that analyse each Claude Code build
+and return a structured verdict. Uses Claude Code CLI so no separate API key
+is required — reuses the existing Claude Code authentication.
 
 Verdicts:
   pass          — build meets the spec, ship it
@@ -17,61 +18,47 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
 
-import anthropic
+import claude_session as cs
 
 logger = logging.getLogger(__name__)
-
-_MODEL = "claude-haiku-4-5-20251001"
 
 _REVIEWER_DEFS = [
     {
         "name": "QA Engineer",
-        "system": (
+        "role": (
             "You are a QA engineer reviewing an AI-generated build. "
             "Pass only if: (1) all requested MVP features appear to be present in the files written, "
             "(2) no test failures are visible in the command output, "
             "(3) no unhandled exceptions or import errors occurred. "
-            "Be pragmatic — minor style issues are not grounds for 'iterate'. "
-            "Respond with valid JSON only: "
-            '{\"verdict\": \"pass\"|\"iterate\"|\"human_needed\", '
-            '\"reasoning\": \"one sentence\", '
-            '\"follow_up\": \"specific fix instruction or empty string\"}'
+            "Be pragmatic — minor style issues are not grounds for 'iterate'."
         ),
+        "follow_up_hint": "specific fix instruction",
     },
     {
         "name": "Spec Checker",
-        "system": (
+        "role": (
             "You compare a build report against the original product spec. "
-            "Flag only clear gaps (features listed in the spec that are completely absent). "
-            "Ignore missing-nice-to-haves. Vote 'human_needed' only if the spec is contradictory "
-            "or fundamentally unclear. "
-            "Respond with valid JSON only: "
-            '{\"verdict\": \"pass\"|\"iterate\"|\"human_needed\", '
-            '\"reasoning\": \"one sentence\", '
-            '\"follow_up\": \"specific missing feature to add or empty string\"}'
+            "Flag only clear gaps — features listed in the spec that are completely absent. "
+            "Ignore missing nice-to-haves. Vote 'human_needed' only if the spec is contradictory "
+            "or fundamentally unclear."
         ),
+        "follow_up_hint": "specific missing feature to add",
     },
     {
         "name": "Integration Tester",
-        "system": (
+        "role": (
             "You check that the built code integrates correctly: no broken imports, "
             "no hardcoded absolute paths that won't work, no missing dependency installs. "
-            "If test output confirms the app started and tests passed, vote 'pass'. "
-            "Respond with valid JSON only: "
-            '{\"verdict\": \"pass\"|\"iterate\"|\"human_needed\", '
-            '\"reasoning\": \"one sentence\", '
-            '\"follow_up\": \"specific integration fix or empty string\"}'
+            "If test output confirms the app started and tests passed, vote 'pass'."
         ),
+        "follow_up_hint": "specific integration fix",
     },
 ]
 
 
 def build_report(spec: dict, iteration: int, events: list[dict]) -> str:
-    """
-    Assemble a human-readable build report from collected claude_session events.
-    """
+    """Assemble a human-readable build report from collected claude_session events."""
     name = spec.get("product_name", "Product") if spec else "Product"
     lines = [
         f"BUILD REPORT — {name} — Iteration {iteration}",
@@ -79,7 +66,6 @@ def build_report(spec: dict, iteration: int, events: list[dict]) -> str:
         "",
     ]
 
-    # Spec summary
     if spec:
         lines.append("SPEC:")
         lines.append(f"  Pitch: {spec.get('one_sentence_pitch', '')}")
@@ -87,7 +73,6 @@ def build_report(spec: dict, iteration: int, events: list[dict]) -> str:
             lines.append(f"  - {b}")
         lines.append("")
 
-    # Collect tool events
     files_written: list[str] = []
     bash_runs: list[dict] = []
     errors: list[str] = []
@@ -105,7 +90,6 @@ def build_report(spec: dict, iteration: int, events: list[dict]) -> str:
                 "output": "",
             })
         elif t == "tool_result" and bash_runs:
-            # Attach output to last bash run
             bash_runs[-1]["output"] = ev.get("content", "")[:500]
         elif t == "done":
             done_text = ev.get("result", "")
@@ -123,7 +107,7 @@ def build_report(spec: dict, iteration: int, events: list[dict]) -> str:
         for run in bash_runs:
             lines.append(f"  $ {run['cmd']}")
             if run["output"]:
-                lines.append(f"    → {run['output'][:300]}")
+                lines.append(f"    -> {run['output'][:300]}")
         lines.append("")
 
     if done_text:
@@ -141,45 +125,67 @@ def build_report(spec: dict, iteration: int, events: list[dict]) -> str:
 
 
 def _parse_verdict(text: str) -> dict:
-    """Extract JSON verdict from LLM response, with fallback."""
+    """Extract JSON verdict from response text, with keyword fallback."""
     try:
-        # Try direct parse
         return json.loads(text.strip())
     except json.JSONDecodeError:
         pass
-    # Try extracting JSON block
     match = re.search(r'\{[^{}]+\}', text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
             pass
-    # Fallback: if "pass" appears in text, assume pass
     text_lower = text.lower()
     if "human_needed" in text_lower:
         verdict = "human_needed"
-    elif "iterate" in text_lower:
-        verdict = "iterate"
-    else:
+    elif "pass" in text_lower:
         verdict = "pass"
+    else:
+        verdict = "iterate"
     return {"verdict": verdict, "reasoning": text[:100], "follow_up": ""}
 
 
-async def _call_reviewer(client: anthropic.AsyncAnthropic, defn: dict, report: str) -> dict:
-    """Call one reviewer persona and return its parsed verdict dict."""
+async def _call_reviewer(defn: dict, report: str, pipeline_session_id: str, iteration: int) -> dict:
+    """
+    Call one reviewer persona via Claude Code CLI and return its parsed verdict.
+
+    Uses a unique agent_id per call so each review starts a fresh Claude session
+    with no --resume, reusing the existing Claude Code authentication.
+    """
+    persona_slug = defn["name"].lower().replace(" ", "_")
+    agent_id = f"reviewer-{pipeline_session_id}-{persona_slug}-i{iteration}"
+
+    # Cap report to avoid hitting Claude Code's stdin chunk limit
+    report_truncated = report[:3000] + ("\n[...truncated]" if len(report) > 3000 else "")
+
+    prompt = (
+        f"You are a {defn['name']}. {defn['role']}\n\n"
+        "Review the build report below and respond with ONLY a single JSON object "
+        "(no markdown, no explanation, just the JSON):\n"
+        '{"verdict": "pass", "reasoning": "one sentence", '
+        f'"follow_up": "{defn["follow_up_hint"]} or empty string"}}\n\n'
+        "Valid verdict values: pass | iterate | human_needed\n\n"
+        f"{report_truncated}"
+    )
+
+    result_text = ""
     try:
-        response = await client.messages.create(
-            model=_MODEL,
-            max_tokens=256,
-            system=defn["system"],
-            messages=[{"role": "user", "content": report}],
-        )
-        raw = response.content[0].text
-        result = _parse_verdict(raw)
-        result["persona"] = defn["name"]
-        return result
+        async for event in cs.stream_task(
+            prompt=prompt,
+            agent_id=agent_id,
+            model="haiku",
+            plan_mode=False,
+        ):
+            if event.get("type") == "done":
+                result_text = event.get("result", "")
+            elif event.get("type") == "text" and not result_text:
+                result_text += event.get("content", "")
     except Exception as exc:
-        logger.error("Reviewer %s failed: %s", defn["name"], exc)
+        cs.reset_session(agent_id)
+        raise
+        logger.error("Reviewer %s CLI call failed: %s", defn["name"], exc)
+        cs.reset_session(agent_id)
         return {
             "persona": defn["name"],
             "verdict": "iterate",
@@ -187,16 +193,29 @@ async def _call_reviewer(client: anthropic.AsyncAnthropic, defn: dict, report: s
             "follow_up": "",
         }
 
+    if not result_text:
+        logger.warning("Reviewer %s returned no text", defn["name"])
+        return {
+            "persona": defn["name"],
+            "verdict": "iterate",
+            "reasoning": "Reviewer returned no output",
+            "follow_up": "",
+        }
+
+    cs.reset_session(agent_id)
+    result = _parse_verdict(result_text)
+    result["persona"] = defn["name"]
+    return result
+
 
 def aggregate_verdicts(verdicts: list[dict]) -> tuple[str, list[str]]:
     """
-    Aggregate three reviewer verdicts into a single verdict + list of follow-up notes.
+    Aggregate three reviewer verdicts into a single verdict + follow-up notes.
 
-    Returns:
-        (aggregate_verdict, follow_up_notes)
+    Returns: (aggregate_verdict, follow_up_notes)
     """
-    counts = {"pass": 0, "iterate": 0, "human_needed": 0}
-    follow_ups = []
+    counts: dict[str, int] = {"pass": 0, "iterate": 0, "human_needed": 0}
+    follow_ups: list[str] = []
 
     for v in verdicts:
         verdict = v.get("verdict", "iterate")
@@ -215,14 +234,12 @@ def aggregate_verdicts(verdicts: list[dict]) -> tuple[str, list[str]]:
 class ReviewerManager:
     """Runs all three reviewers concurrently and returns aggregate result."""
 
-    def __init__(self) -> None:
-        self._client = anthropic.AsyncAnthropic()
-
     async def review(
         self,
         spec: dict,
         iteration: int,
         events: list[dict],
+        session_id: str = "unknown",
     ) -> dict:
         """
         Run all three reviewers against the build and return:
@@ -230,15 +247,14 @@ class ReviewerManager:
                 "verdict": "pass"|"iterate"|"human_needed",
                 "verdicts": [individual verdict dicts],
                 "follow_up_notes": [str],
-                "report": str   # the build report text
+                "report": str
             }
         """
         report = build_report(spec, iteration, events)
 
-        individual = await asyncio.gather(
-            *[_call_reviewer(self._client, d, report) for d in _REVIEWER_DEFS]
-        )
-        individual = list(individual)
+        individual = list(await asyncio.gather(
+            *[_call_reviewer(d, report, session_id, iteration) for d in _REVIEWER_DEFS]
+        ))
 
         agg_verdict, follow_up_notes = aggregate_verdicts(individual)
 

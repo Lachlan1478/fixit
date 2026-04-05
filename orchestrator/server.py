@@ -14,17 +14,22 @@ import os
 import sys
 
 from dotenv import load_dotenv
+_HERE_ENV = os.path.dirname(os.path.abspath(__file__))
+# Load orchestrator .env first, then Assembly's (for OPENAI_API_KEY)
 load_dotenv()
+load_dotenv(os.path.join(_HERE_ENV, "..", "..", "Assembly", ".env"))
 
 # ── sys.path: make claude-agent and Assembly importable ────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CLAUDE_AGENT_DIR = os.path.abspath(os.path.join(_HERE, "..", "claude-agent"))
 _ASSEMBLY_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "Assembly"))
 
-# Insert in reverse priority order so _HERE ends up at sys.path[0]
-for _p in [_ASSEMBLY_DIR, _CLAUDE_AGENT_DIR, _HERE]:
+for _p in [_ASSEMBLY_DIR, _CLAUDE_AGENT_DIR]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
+if _HERE in sys.path:
+    sys.path.remove(_HERE)
+sys.path.insert(0, _HERE)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse

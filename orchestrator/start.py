@@ -16,9 +16,13 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _CLAUDE_AGENT_DIR = os.path.abspath(os.path.join(_HERE, "..", "claude-agent"))
 _ASSEMBLY_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "Assembly"))
 
-for _p in [_ASSEMBLY_DIR, _CLAUDE_AGENT_DIR, _HERE]:
+for _p in [_ASSEMBLY_DIR, _CLAUDE_AGENT_DIR]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
+# Always keep orchestrator first (Python may have pre-added it deeper in the list)
+if _HERE in sys.path:
+    sys.path.remove(_HERE)
+sys.path.insert(0, _HERE)
 
 import argparse
 import uvicorn
@@ -30,12 +34,12 @@ if __name__ == "__main__":
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
 
-    print(f"\n  Assembly × Claude")
-    print(f"  ─────────────────────────────────────────")
+    print(f"\n  Assembly x Claude")
+    print(f"  -----------------------------------------")
     print(f"  Orchestrator:  http://{args.host}:{args.port}")
     print(f"  Claude Agent:  http://localhost:8007  (run separately)")
     print(f"  Assembly UI:   http://localhost:8000  (run separately)")
-    print(f"  ─────────────────────────────────────────\n")
+    print(f"  -----------------------------------------\n")
 
     import server as srv
     uvicorn.run(

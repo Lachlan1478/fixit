@@ -25,10 +25,14 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _CLAUDE_AGENT_DIR = os.path.join(_HERE, "..", "claude-agent")
 _ASSEMBLY_DIR = os.path.join(_HERE, "..", "..", "Assembly")
 
-for _p in [_ASSEMBLY_DIR, _CLAUDE_AGENT_DIR, _HERE]:
+for _p in [_ASSEMBLY_DIR, _CLAUDE_AGENT_DIR]:
     _abs = os.path.abspath(_p)
     if _abs not in sys.path:
         sys.path.insert(0, _abs)
+_here_abs = os.path.abspath(_HERE)
+if _here_abs in sys.path:
+    sys.path.remove(_here_abs)
+sys.path.insert(0, _here_abs)
 
 # ── project imports ────────────────────────────────────────────────────────────
 import claude_session as cs
@@ -43,7 +47,7 @@ import session_store as store
 
 logger = logging.getLogger(__name__)
 
-_MAX_ITERATIONS = 5
+_MAX_ITERATIONS = 2
 _SPEC_APPROVAL_TIMEOUT = 300  # seconds before auto-approve
 _EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
@@ -261,6 +265,7 @@ class Pipeline:
                 spec=self.s.spec,
                 iteration=self.s.iteration_count,
                 events=events,
+                session_id=self.s.session_id,
             )
 
             # Emit individual verdicts
@@ -307,7 +312,9 @@ class Pipeline:
     async def _stream_claude(self, prompt: str) -> list[dict]:
         """Stream a Claude Code task and return all collected events."""
         events: list[dict] = []
-        agent_id = self.s.session_id  # fixed agent_id for --resume continuity
+        # Fresh agent_id per iteration — no --resume across iterations so context
+        # doesn't compound and drive up token costs.
+        agent_id = f"{self.s.session_id}-iter{self.s.iteration_count}"
 
         try:
             async for event in cs.stream_task(

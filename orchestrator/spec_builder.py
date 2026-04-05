@@ -22,40 +22,24 @@ def build_prompt(convergence: dict) -> str:
     """
     name = convergence.get("product_name", "Product")
     pitch = convergence.get("one_sentence_pitch", "")
-    icp = convergence.get("target_user_icp", "")
     mvp = convergence.get("mvp_bullets", [])
-    monetization = convergence.get("monetization_model", "")
-    differentiator = convergence.get("key_differentiator", "")
     not_doing = convergence.get("what_we_are_not_doing", [])
-    risks = convergence.get("risks_unknowns", [])
-    plan = convergence.get("next_7_day_plan", [])
     slug = _slug(name)
 
     mvp_lines = "\n".join(f"  - {b}" for b in mvp) if mvp else "  - (see pitch)"
     not_doing_lines = "\n".join(f"  - {x}" for x in not_doing) if not_doing else ""
-    risks_lines = "\n".join(f"  - {r}" for r in risks) if risks else ""
-    plan_lines = "\n".join(f"  - {p}" for p in plan) if plan else ""
 
     sections = [
         f"# Build: {name}",
         "",
         f"**Pitch:** {pitch}",
-        f"**Target user:** {icp}",
         "",
         "## MVP Features (build ALL of these)",
         mvp_lines,
     ]
 
-    if monetization:
-        sections += ["", f"**Monetization model (design for this):** {monetization}"]
-    if differentiator:
-        sections += [f"**Key differentiator:** {differentiator}"]
     if not_doing_lines:
         sections += ["", "## Out of scope (do NOT build these)", not_doing_lines]
-    if risks_lines:
-        sections += ["", "## Known risks/unknowns (handle these)", risks_lines]
-    if plan_lines:
-        sections += ["", "## Suggested implementation order", plan_lines]
 
     sections += [
         "",
