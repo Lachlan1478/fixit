@@ -65,6 +65,7 @@ class StartRequest(BaseModel):
     problem: str
     mode: str = "medium"
     auto_approve_spec: bool = False
+    purpose: str = "product"   # "product" | "personal"
 
 
 class ApproveSpecRequest(BaseModel):
@@ -93,6 +94,7 @@ async def start_pipeline(req: StartRequest):
         problem=req.problem,
         mode=req.mode,
         auto_approve_spec=req.auto_approve_spec,
+        purpose=req.purpose,
     )
     _pipelines[session.session_id] = pipeline
     asyncio.create_task(pipeline.run())

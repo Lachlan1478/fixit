@@ -75,6 +75,7 @@ class PipelineSession:
     state: PipelineState
     mode: str
     auto_approve_spec: bool
+    purpose: str = "product"   # "product" | "personal"
 
     # Assembly outputs
     ideas: list = field(default_factory=list)
@@ -223,7 +224,7 @@ class Pipeline:
             result = await loop.run_in_executor(
                 _EXECUTOR,
                 lambda: multiple_llm_idea_generator(
-                    inspiration=self.s.problem,
+                    inspiration=_frame_problem(self.s.problem, self.s.purpose),
                     number_of_ideas=1,
                     mode=self.s.mode,
                     monitor=emitter,
@@ -354,7 +355,7 @@ class Pipeline:
 
     def _build_current_prompt(self) -> str:
         if self.s.iteration_count == 1:
-            return build_prompt(self.s.spec)
+            return build_prompt(self.s.spec, purpose=self.s.purpose)
 
         # Subsequent iterations: use reviewer follow-up notes
         last_review = self.s.reviewer_verdicts[-1] if self.s.reviewer_verdicts else {}
@@ -529,10 +530,28 @@ class Pipeline:
         asyncio.create_task(send_notification(f"[Assembly×Claude] {message}"))
 
 
+_PERSONAL_PREFIX = (
+    "IMPORTANT CONTEXT: This is a personal-use tool, not a startup or commercial product. "
+    "Focus entirely on solving the problem for one person. Do NOT discuss monetisation, "
+    "target market, ICP, investors, or GTM strategy. The 'product name' can just be a "
+    "descriptive label. The 'pitch' should describe what the tool does, not why it will "
+    "succeed commercially. MVP features should be the simplest thing that solves the problem.\n\n"
+    "PROBLEM TO SOLVE:\n"
+)
+
+
+def _frame_problem(problem: str, purpose: str) -> str:
+    """Wrap the problem with purpose-specific framing for Assembly."""
+    if purpose == "personal":
+        return _PERSONAL_PREFIX + problem
+    return problem
+
+
 def create_session(
     problem: str,
     mode: str = "medium",
     auto_approve_spec: bool = False,
+    purpose: str = "product",
 ) -> tuple[PipelineSession, "Pipeline"]:
     """Create a new session + pipeline. Caller must `asyncio.create_task(pipeline.run())`."""
     session_id = str(uuid.uuid4())[:8]
@@ -542,6 +561,7 @@ def create_session(
         state=PipelineState.IDLE,
         mode=mode,
         auto_approve_spec=auto_approve_spec,
+        purpose=purpose,
     )
     store.put(session)
     pipeline = Pipeline(session)

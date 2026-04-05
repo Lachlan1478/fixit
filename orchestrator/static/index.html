@@ -526,6 +526,12 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
         <option value="deep">Deep (exhaustive)</option>
       </select>
 
+      <label for="purpose-select">Purpose</label>
+      <select id="purpose-select" aria-label="Build purpose">
+        <option value="product">Product / startup</option>
+        <option value="personal">Personal tool</option>
+      </select>
+
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
         <input type="checkbox" id="auto-approve" style="cursor:pointer;" aria-label="Auto-approve spec" />
         Auto-approve spec
@@ -657,7 +663,7 @@ async function startPipeline() {
     const res = await fetch('/pipeline/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({problem, mode, auto_approve_spec: autoApprove}),
+      body: JSON.stringify({problem, mode, auto_approve_spec: autoApprove, purpose: document.getElementById('purpose-select').value}),
     });
     if (!res.ok) {
       const err = await res.json();
