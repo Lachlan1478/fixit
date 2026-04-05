@@ -46,7 +46,15 @@ from pipeline import (
 )
 import session_store as store
 
-logging.basicConfig(level=logging.INFO)
+_LOG_FILE = os.path.join(os.path.dirname(__file__), "orchestrator.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s:%(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+    ],
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Assembly × Claude", version="1.0.0")

@@ -252,9 +252,10 @@ class ReviewerManager:
         """
         report = build_report(spec, iteration, events)
 
-        individual = list(await asyncio.gather(
-            *[_call_reviewer(d, report, session_id, iteration) for d in _REVIEWER_DEFS]
-        ))
+        # Run reviewers sequentially — concurrent subprocesses deadlock on Windows ProactorEventLoop
+        individual = []
+        for d in _REVIEWER_DEFS:
+            individual.append(await _call_reviewer(d, report, session_id, iteration))
 
         agg_verdict, follow_up_notes = aggregate_verdicts(individual)
 
