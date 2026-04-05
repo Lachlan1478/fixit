@@ -113,7 +113,7 @@ async def stream_pipeline(session_id: str):
         # Send current state immediately on connect
         yield _sse({"type": "state_change", "old": "unknown", "new": session.state})
 
-        terminal_states = {PipelineState.COMPLETE, PipelineState.ERROR}
+        terminal_states = {PipelineState.COMPLETE, PipelineState.ERROR, PipelineState.CANCELLED}
 
         while session.state not in terminal_states:
             try:
@@ -124,7 +124,7 @@ async def stream_pipeline(session_id: str):
                 yield _sse(event)
 
                 # Terminal: drain remaining events then stop
-                if event.get("type") in ("pipeline_complete", "error"):
+                if event.get("type") in ("pipeline_complete", "error", "pipeline_cancelled"):
                     # Drain residual
                     while not session.event_queue.empty():
                         yield _sse(session.event_queue.get_nowait())
@@ -180,6 +180,18 @@ async def human_input(session_id: str, req: HumanInputRequest):
 
     pipeline.provide_human_input(req.message)
     return {"status": "received", "session_id": session_id}
+
+
+@app.post("/pipeline/{session_id}/cancel")
+async def cancel_pipeline(session_id: str):
+    session = store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    pipeline = _pipelines.get(session_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not running")
+    pipeline.cancel()
+    return {"status": "cancelling", "session_id": session_id}
 
 
 @app.get("/pipeline/{session_id}")

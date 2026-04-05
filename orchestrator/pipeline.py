@@ -62,6 +62,7 @@ class PipelineState(str, Enum):
     AWAITING_HUMAN = "awaiting_human"
     COMPLETE       = "complete"
     ERROR          = "error"
+    CANCELLED      = "cancelled"
 
 
 def _now_iso() -> str:
@@ -112,6 +113,13 @@ class PipelineSession:
     spec_approved_event: asyncio.Event = field(default_factory=asyncio.Event)
     human_input_event: asyncio.Event = field(default_factory=asyncio.Event)
     human_input_text: str = ""
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+
+    # Ideation progress (updated live during IDEATING)
+    ideation_phases_total: int = 0
+    ideation_phases_done: int = 0
+    ideation_current_turn: int = 0
+    ideation_max_turns: int = 0
 
     def touch(self) -> None:
         self.updated_at = _now_iso()
@@ -185,16 +193,22 @@ class Pipeline:
         self.s.human_input_text = message
         self.s.human_input_event.set()
 
+    def cancel(self) -> None:
+        """Request cancellation of the pipeline (works in any state)."""
+        self.s.cancel_event.set()
+
     # ── Main run loop ──────────────────────────────────────────────────────────
 
     async def run(self) -> None:
         try:
             await self._run_ideation()
+            if self.s.cancel_event.is_set():
+                raise asyncio.CancelledError
             await self._wait_for_spec_approval()
             await self._run_build_loop()
         except asyncio.CancelledError:
-            self._set_state(PipelineState.ERROR)
-            self._emit({"type": "error", "message": "Pipeline cancelled."})
+            self._set_state(PipelineState.CANCELLED)
+            self._emit({"type": "pipeline_cancelled", "message": "Pipeline stopped."})
         except Exception as exc:
             logger.exception("Pipeline %s fatal error", self.s.session_id)
             self._set_state(PipelineState.ERROR)
@@ -208,6 +222,42 @@ class Pipeline:
 
     # ── Phase: IDEATING ────────────────────────────────────────────────────────
 
+    async def _ideation_progress_watcher(self, done_event: asyncio.Event) -> None:
+        """
+        Background task: peek at events emitted by Assembly and emit
+        ideation_progress updates whenever phases are announced or a turn starts.
+        Runs until done_event is set.
+        """
+        while not done_event.is_set():
+            await asyncio.sleep(0.3)
+            try:
+                items = list(self.s.event_queue._queue)  # type: ignore[attr-defined]
+            except Exception:
+                continue
+            for item in items:
+                t = item.get("type")
+                if t == "phases_generated":
+                    phases = item.get("phases", [])
+                    if phases and self.s.ideation_phases_total == 0:
+                        self.s.ideation_phases_total = len(phases)
+                        self._emit_progress()
+                elif t == "phase_complete":
+                    self.s.ideation_phases_done += 1
+                    self._emit_progress()
+                elif t == "turn_start":
+                    self.s.ideation_current_turn = item.get("turn_num", 0)
+                    self.s.ideation_max_turns = item.get("max_turns", 0)
+                    self._emit_progress()
+
+    def _emit_progress(self) -> None:
+        self._emit({
+            "type": "ideation_progress",
+            "phases_total": self.s.ideation_phases_total,
+            "phases_done": self.s.ideation_phases_done,
+            "current_turn": self.s.ideation_current_turn,
+            "max_turns": self.s.ideation_max_turns,
+        })
+
     async def _run_ideation(self) -> None:
         self._set_state(PipelineState.IDEATING)
         self.s.ideation_started_at = _now_iso()
@@ -219,6 +269,9 @@ class Pipeline:
             loop=loop,
             base_dir=os.path.join(_HERE, "conversation_logs"),
         )
+
+        watcher_done = asyncio.Event()
+        watcher_task = asyncio.create_task(self._ideation_progress_watcher(watcher_done))
 
         try:
             result = await loop.run_in_executor(
@@ -234,6 +287,9 @@ class Pipeline:
             )
         except Exception as exc:
             raise RuntimeError(f"Assembly ideation failed: {exc}") from exc
+        finally:
+            watcher_done.set()
+            watcher_task.cancel()
 
         # Extract convergence output
         if isinstance(result, dict):
