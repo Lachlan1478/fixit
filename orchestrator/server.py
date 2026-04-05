@@ -13,6 +13,10 @@ import logging
 import os
 import sys
 
+# Windows requires ProactorEventLoop to spawn subprocesses from async code
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from dotenv import load_dotenv
 _HERE_ENV = os.path.dirname(os.path.abspath(__file__))
 # Load orchestrator .env first, then Assembly's (for OPENAI_API_KEY)
