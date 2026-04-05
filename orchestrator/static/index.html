@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Assembly × Claude</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%237c6af7'/><text x='16' y='22' text-anchor='middle' font-size='18' font-family='monospace' fill='white'>×</text></svg>">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -17,6 +18,7 @@
   --green:    #22c55e;
   --red:      #ef4444;
   --yellow:   #eab308;
+  --orange:   #f97316;
   --text:     #e8e8f0;
   --muted:    #7a7a90;
   --pass:     #22c55e;
@@ -26,31 +28,80 @@
 
 html, body { height: 100%; background: var(--bg); color: var(--text); font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 13px; }
 
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
 /* ── Layout ── */
 .app { display: flex; flex-direction: column; height: 100vh; }
 
+/* ── Header ── */
 header {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 10px;
   padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  flex-shrink: 0; position: relative;
 }
 header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
-  transition: background 0.3s;
+  transition: background 0.3s; flex-shrink: 0;
 }
-.status-dot.idle     { background: var(--muted); }
-.status-dot.ideating { background: var(--accent); animation: pulse 1.4s infinite; }
-.status-dot.building { background: var(--yellow); animation: pulse 1.4s infinite; }
-.status-dot.reviewing{ background: var(--accent2); animation: pulse 1.4s infinite; }
-.status-dot.complete { background: var(--green); }
-.status-dot.error    { background: var(--red); }
+.status-dot.idle       { background: var(--muted); }
+.status-dot.ideating   { background: var(--accent); animation: pulse 1.4s infinite; }
+.status-dot.building   { background: var(--yellow); animation: pulse 1.4s infinite; }
+.status-dot.reviewing  { background: var(--accent2); animation: pulse 1.4s infinite; }
+.status-dot.complete   { background: var(--green); }
+.status-dot.error      { background: var(--red); }
 .status-dot.awaiting_human { background: var(--human); animation: pulse 1.4s infinite; }
-.status-dot.spec_review { background: var(--yellow); }
+.status-dot.spec_review    { background: var(--yellow); }
+.status-dot.iterating      { background: var(--yellow); animation: pulse 1.4s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-#state-label { font-size: 11px; color: var(--muted); }
-#session-id  { font-size: 10px; color: var(--border); margin-left: auto; }
+#state-label {
+  font-size: 11px; font-weight: 600;
+  transition: color 0.3s;
+}
+#state-label.idle          { color: var(--muted); }
+#state-label.ideating      { color: var(--accent); }
+#state-label.building      { color: var(--yellow); }
+#state-label.reviewing     { color: var(--accent2); }
+#state-label.complete      { color: var(--green); }
+#state-label.error         { color: var(--red); }
+#state-label.awaiting_human { color: var(--human); }
+#state-label.spec_review   { color: var(--yellow); }
+#state-label.iterating     { color: var(--yellow); }
+
+.header-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+/* Session history picker */
+#session-picker {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+  border-radius: 5px; padding: 3px 8px; font-family: inherit; font-size: 10px;
+  cursor: pointer; max-width: 140px;
+}
+#session-picker:focus { outline: none; border-color: var(--accent); }
+
+/* Mini cost badge */
+#cost-badge {
+  display: none; font-size: 10px; color: var(--accent2); background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 10px; padding: 2px 8px;
+  font-weight: 600; white-space: nowrap;
+}
+#cost-badge.visible { display: block; }
+
+/* Session ID */
+#session-id { font-size: 10px; color: var(--border); }
+
+/* Info button */
+#info-btn {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 50%; width: 24px; height: 24px; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  transition: border-color .2s, color .2s;
+}
+#info-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ── Tabs (mobile) ── */
 .tab-bar {
@@ -73,7 +124,7 @@ header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
 }
 .panel {
   display: flex; flex-direction: column; border-right: 1px solid var(--border);
-  overflow: hidden;
+  overflow: hidden; min-height: 0;
 }
 .panel:last-child { border-right: none; }
 .panel-header {
@@ -87,17 +138,26 @@ header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
 /* ── Footer ── */
 footer {
   background: var(--surface); border-top: 1px solid var(--border);
-  padding: 12px 16px; flex-shrink: 0;
+  padding: 10px 16px; flex-shrink: 0;
 }
-.footer-top { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
-.footer-top label { font-size: 11px; color: var(--muted); }
+
+/* Problem input — compact by default, expands on focus */
 #problem-input {
   width: 100%; background: var(--surface2); border: 1px solid var(--border);
   color: var(--text); border-radius: 6px; padding: 8px 10px;
-  font-family: inherit; font-size: 13px; resize: vertical; min-height: 60px;
-  margin-bottom: 8px;
+  font-family: inherit; font-size: 13px; resize: none;
+  height: 38px; overflow: hidden;
+  transition: height .2s ease, border-color .2s;
+  margin-bottom: 4px; display: block;
 }
-#problem-input:focus { outline: none; border-color: var(--accent); }
+#problem-input:focus { outline: none; border-color: var(--accent); height: 80px; overflow-y: auto; }
+#problem-input.error { border-color: var(--red); }
+#input-error { display: none; font-size: 11px; color: var(--red); margin-bottom: 6px; }
+#input-error.visible { display: block; }
+
+.footer-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.footer-controls label { font-size: 11px; color: var(--muted); }
+
 select, .btn {
   background: var(--surface2); border: 1px solid var(--border); color: var(--text);
   border-radius: 5px; padding: 6px 12px; font-family: inherit; font-size: 12px; cursor: pointer;
@@ -106,9 +166,12 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn-primary:hover { background: var(--accent2); border-color: var(--accent2); }
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-.btn-green { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+.btn-green  { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
 .btn-green:hover { background: var(--green); }
 .btn-orange { background: #c2410c; border-color: #c2410c; color: #fff; font-weight: 600; }
+
+#loading-hint { font-size: 10px; color: var(--muted); margin-left: 6px; display: none; }
+#loading-hint.visible { display: inline; }
 
 /* ── Human input banner ── */
 #human-banner {
@@ -122,25 +185,15 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 #human-input:focus { outline: none; border-color: var(--human); }
 
 /* ── Assembly messages (Panel A) ── */
-.assembly-msg {
-  margin-bottom: 10px; animation: slideIn .2s ease;
-}
-.assembly-msg .speaker {
-  font-size: 10px; font-weight: 600; color: var(--accent2); margin-bottom: 2px;
-}
-.assembly-msg .archetype {
-  font-size: 9px; color: var(--muted); margin-bottom: 3px;
-}
-.assembly-msg .content {
-  color: var(--text); font-size: 12px; line-height: 1.5;
-  background: var(--surface2); border-radius: 5px; padding: 6px 8px;
-}
+.assembly-msg { margin-bottom: 10px; animation: slideIn .2s ease; }
+.assembly-msg .speaker { font-size: 10px; font-weight: 600; color: var(--accent2); margin-bottom: 2px; }
+.assembly-msg .archetype { font-size: 9px; color: var(--muted); margin-bottom: 3px; }
+.assembly-msg .content { color: var(--text); font-size: 12px; line-height: 1.5; background: var(--surface2); border-radius: 5px; padding: 6px 8px; }
 .assembly-msg.mediator .speaker { color: var(--yellow); }
 .phase-divider {
   text-align: center; color: var(--muted); font-size: 10px;
   padding: 6px 0; letter-spacing: .06em; text-transform: uppercase;
-  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
-  margin: 8px 0;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 8px 0;
 }
 .idea-pill {
   display: inline-block; background: #1e1b4b; border: 1px solid var(--accent);
@@ -157,7 +210,6 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 .spec-section ul { padding-left: 16px; }
 .spec-section li { font-size: 12px; color: var(--text); margin-bottom: 2px; }
 #approve-btn { width: 100%; margin-top: 8px; padding: 10px; }
-#spec-placeholder { color: var(--muted); font-size: 12px; text-align: center; padding: 40px 20px; }
 
 /* ── Claude feed (Panel C) ── */
 .feed-item { margin-bottom: 8px; animation: slideIn .2s ease; }
@@ -165,12 +217,12 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
   font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px;
   display: inline-block; margin-bottom: 3px;
 }
-.fi-tool  .fi-label { background: #312e81; color: var(--accent2); }
-.fi-text  .fi-label { background: var(--surface2); color: var(--muted); }
-.fi-done  .fi-label { background: #14532d; color: var(--green); }
-.fi-error .fi-label { background: #450a0a; color: var(--red); }
+.fi-tool   .fi-label { background: #312e81; color: var(--accent2); }
+.fi-text   .fi-label { background: var(--surface2); color: var(--muted); }
+.fi-done   .fi-label { background: #14532d; color: var(--green); }
+.fi-error  .fi-label { background: #450a0a; color: var(--red); }
 .fi-status .fi-label { background: var(--surface2); color: var(--muted); }
-.fi-image .fi-label { background: #1a1a2e; color: var(--accent); }
+.fi-image  .fi-label { background: #1a1a2e; color: var(--accent); }
 .feed-item .fi-body { font-size: 12px; color: var(--muted); line-height: 1.4; padding: 4px 6px; }
 .fi-text .fi-body, .fi-done .fi-body { color: var(--text); }
 .fi-image img { max-width: 100%; border-radius: 4px; margin-top: 4px; cursor: zoom-in; }
@@ -178,35 +230,102 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 .todo-list li { font-size: 11px; padding: 2px 0; display: flex; align-items: center; gap: 5px; }
 .todo-list li.done { color: var(--green); }
 .todo-list li.pending { color: var(--muted); }
-.iteration-badge {
-  background: var(--surface2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 4px 8px; font-size: 10px; color: var(--muted);
-  margin-bottom: 8px; text-align: center;
+.iteration-badge { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 10px; color: var(--muted); margin-bottom: 8px; text-align: center; }
+
+/* View app link */
+.view-app-link {
+  display: flex; align-items: center; gap: 6px;
+  background: #1e1b4b; border: 1px solid var(--accent); border-radius: 6px;
+  padding: 6px 10px; margin-bottom: 8px; text-decoration: none;
+  font-size: 11px; color: var(--accent2); animation: slideIn .3s ease;
 }
+.view-app-link:hover { background: #2d2a5e; color: var(--accent2); }
 
 /* ── Reviewer panel (Panel D) ── */
 .reviewer-card { background: var(--surface2); border-radius: 6px; padding: 10px; margin-bottom: 8px; }
 .reviewer-card .rc-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .reviewer-card .rc-name { font-size: 11px; font-weight: 600; color: var(--text); }
 .verdict-badge { font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: 600; }
-.verdict-pass     { background: #14532d; color: var(--pass); }
-.verdict-iterate  { background: #713f12; color: var(--iterate); }
+.verdict-pass         { background: #14532d; color: var(--pass); }
+.verdict-iterate      { background: #713f12; color: var(--iterate); }
 .verdict-human_needed { background: #431407; color: var(--human); }
-.verdict-pending  { background: var(--surface); color: var(--muted); }
+.verdict-pending      { background: var(--surface); color: var(--muted); }
 .reviewer-card .rc-reasoning { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
-.reviewer-card .rc-followup { font-size: 11px; color: var(--text); font-style: italic; }
-.aggregate-block {
-  border: 1px solid var(--border); border-radius: 6px; padding: 10px;
-  margin-bottom: 10px; text-align: center;
-}
-.aggregate-block .agg-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+.reviewer-card .rc-followup  { font-size: 11px; color: var(--text); font-style: italic; }
+.aggregate-block { border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 10px; text-align: center; }
+.aggregate-block .agg-label   { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
 .aggregate-block .agg-verdict { font-size: 18px; font-weight: 700; }
-.agg-pass { color: var(--pass); }
-.agg-iterate { color: var(--iterate); }
+.agg-pass         { color: var(--pass); }
+.agg-iterate      { color: var(--iterate); }
 .agg-human_needed { color: var(--human); }
-#reviewer-placeholder { color: var(--muted); font-size: 12px; text-align: center; padding: 40px 20px; }
 
 @keyframes slideIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── Info drawer ── */
+#info-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  z-index: 500; backdrop-filter: blur(2px);
+}
+#info-overlay.open { display: block; }
+#info-drawer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--surface); border-top: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  max-height: 80vh; overflow-y: auto;
+  z-index: 501;
+  transform: translateY(100%);
+  transition: transform .3s cubic-bezier(.16,1,.3,1);
+  padding-bottom: 24px;
+}
+#info-drawer.open { transform: translateY(0); }
+.drawer-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin: 10px auto 0; }
+.drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px 8px; border-bottom: 1px solid var(--border);
+}
+.drawer-header h2 { font-size: 13px; font-weight: 600; color: var(--text); }
+.drawer-close { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; }
+.drawer-close:hover { color: var(--text); }
+.drawer-section { padding: 12px 16px 0; }
+.drawer-section-title {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em;
+  margin-bottom: 8px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+  user-select: none;
+}
+.drawer-section-title .title-inner { display: flex; align-items: center; gap: 6px; }
+.drawer-section-title::after { content: '▾'; font-size: 10px; }
+.drawer-section-title.collapsed::after { content: '▸'; }
+.drawer-section-body { font-size: 12px; color: var(--text); line-height: 1.6; }
+.drawer-section-body.collapsed { display: none; }
+.info-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 4px 0; border-bottom: 1px solid var(--border);
+}
+.info-row:last-child { border-bottom: none; }
+.info-row .lbl { color: var(--muted); font-size: 11px; }
+.info-row .val { color: var(--text); font-size: 11px; font-weight: 600; }
+.info-cost-total {
+  margin-top: 8px; padding: 8px 10px; background: var(--surface2);
+  border-radius: 5px; display: flex; justify-content: space-between; align-items: center;
+}
+.info-cost-total .lbl { color: var(--muted); font-size: 11px; }
+.info-cost-total .val { color: var(--accent2); font-size: 14px; font-weight: 700; }
+.info-mvp-list { padding-left: 14px; margin-top: 4px; }
+.info-mvp-list li { font-size: 12px; margin-bottom: 3px; }
+.info-verdict-row { background: var(--surface2); border-radius: 5px; padding: 6px 8px; margin-bottom: 5px; }
+.info-verdict-row .iv-header { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.info-verdict-row .iv-name { font-size: 11px; font-weight: 600; }
+.info-verdict-row .iv-text { font-size: 11px; color: var(--muted); }
+.how-it-works .step { display: flex; gap: 8px; margin-bottom: 8px; align-items: flex-start; }
+.how-it-works .step-num {
+  background: var(--accent); color: #fff; border-radius: 50%;
+  width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; flex-shrink: 0; margin-top: 1px;
+}
+.how-it-works .step-text { color: var(--text); font-size: 12px; line-height: 1.5; }
 
 /* ── Lightbox ── */
 #lightbox {
@@ -217,10 +336,10 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 #lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
 
 /* ── Mobile ── */
-@media (max-width: 800px) {
+@media (max-width: 1024px) {
   .tab-bar { display: flex; }
   .panels { grid-template-columns: 1fr; }
-  .panel { display: none; }
+  .panel { display: none; min-height: 300px; }
   .panel.active { display: flex; }
 }
 </style>
@@ -232,16 +351,100 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
   <header>
     <div class="status-dot idle" id="status-dot"></div>
     <h1>Assembly × Claude</h1>
-    <span id="state-label">idle</span>
-    <span id="session-id"></span>
+    <span id="state-label" class="idle">idle</span>
+    <div class="header-right">
+      <select id="session-picker" aria-label="Recent sessions" title="Load a recent session" onchange="loadSession(this.value)">
+        <option value="">Recent sessions...</option>
+      </select>
+      <span id="cost-badge">~$0.00</span>
+      <span id="session-id"></span>
+      <button id="info-btn" onclick="openInfoDrawer()" aria-label="Pipeline info" title="Pipeline info">ⓘ</button>
+    </div>
   </header>
 
+  <!-- Info drawer overlay -->
+  <div id="info-overlay" onclick="closeInfoDrawer()"></div>
+  <div id="info-drawer" role="dialog" aria-label="Pipeline Info" aria-modal="true">
+    <div class="drawer-handle"></div>
+    <div class="drawer-header">
+      <h2>Pipeline Info</h2>
+      <button class="drawer-close" onclick="closeInfoDrawer()" aria-label="Close">×</button>
+    </div>
+
+    <!-- How it works — first so new users see it immediately -->
+    <div class="drawer-section">
+      <div class="drawer-section-title" onclick="toggleSection(this)">
+        <span class="title-inner">⚙️ How it works</span>
+      </div>
+      <div class="drawer-section-body how-it-works">
+        <div class="step"><div class="step-num">1</div><div class="step-text"><strong>Assembly</strong> — Multiple GPT-4 AI personas debate your problem and converge on a product spec with MVP features, target user, and differentiator.</div></div>
+        <div class="step"><div class="step-num">2</div><div class="step-text"><strong>Spec Review</strong> — You review and optionally edit the spec before approving. Auto-approve skips this step.</div></div>
+        <div class="step"><div class="step-num">3</div><div class="step-text"><strong>Claude Code</strong> — Claude Code receives the spec as a prompt and builds the product, streaming every tool call, file write, and bash command live.</div></div>
+        <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Review</strong> — Three reviewer personas (QA Engineer, Spec Checker, Integration Tester) independently judge the build and return pass / iterate / human_needed.</div></div>
+        <div class="step"><div class="step-num">5</div><div class="step-text"><strong>Iterate</strong> — If 2+ reviewers pass, the pipeline completes. Otherwise reviewer notes are fed back to Claude for another build attempt (max 2 iterations).</div></div>
+        <div class="step"><div class="step-num">6</div><div class="step-text"><strong>Human escalation</strong> — If reviewers can't agree or the iteration limit is hit, you're notified and can provide guidance to unblock the pipeline.</div></div>
+      </div>
+    </div>
+
+    <!-- Overview -->
+    <div class="drawer-section">
+      <div class="drawer-section-title" onclick="toggleSection(this)">
+        <span class="title-inner">📋 Overview</span>
+      </div>
+      <div class="drawer-section-body" id="info-overview">
+        <div style="color:var(--muted);font-size:11px;">Start a pipeline to see product details.</div>
+      </div>
+    </div>
+
+    <!-- Cost & Usage -->
+    <div class="drawer-section">
+      <div class="drawer-section-title" onclick="toggleSection(this)">
+        <span class="title-inner">💰 Cost &amp; Usage</span>
+      </div>
+      <div class="drawer-section-body" id="info-costs">
+        <div class="info-row"><span class="lbl">OpenAI (Assembly)</span><span class="val" id="cost-openai">—</span></div>
+        <div class="info-row"><span class="lbl">OpenAI tokens</span><span class="val" id="tokens-openai">—</span></div>
+        <div class="info-row"><span class="lbl">Claude (build + review)</span><span class="val" id="cost-claude">—</span></div>
+        <div class="info-row"><span class="lbl">Claude input tokens</span><span class="val" id="tokens-claude-in">—</span></div>
+        <div class="info-row"><span class="lbl">Claude output tokens</span><span class="val" id="tokens-claude-out">—</span></div>
+        <div class="info-cost-total">
+          <span class="lbl">Estimated total</span>
+          <span class="val" id="cost-total">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timing -->
+    <div class="drawer-section">
+      <div class="drawer-section-title" onclick="toggleSection(this)">
+        <span class="title-inner">⏱ Timing</span>
+      </div>
+      <div class="drawer-section-body" id="info-timing">
+        <div class="info-row"><span class="lbl">Started</span><span class="val" id="timing-started">—</span></div>
+        <div class="info-row"><span class="lbl">Ideation</span><span class="val" id="timing-ideation">—</span></div>
+        <div class="info-row"><span class="lbl">Build loop</span><span class="val" id="timing-build">—</span></div>
+        <div class="info-row"><span class="lbl">Iterations</span><span class="val" id="timing-iters">—</span></div>
+      </div>
+    </div>
+
+    <!-- Reviewer Detail -->
+    <div class="drawer-section">
+      <div class="drawer-section-title" onclick="toggleSection(this)">
+        <span class="title-inner">🔍 Reviewer Detail</span>
+      </div>
+      <div class="drawer-section-body" id="info-reviewer-detail">
+        <div style="color:var(--muted);font-size:11px;">No verdicts yet.</div>
+      </div>
+    </div>
+
+  </div>
+
   <!-- Tab bar (mobile only) -->
-  <div class="tab-bar">
-    <button class="active" onclick="switchTab(0)">Ideation</button>
-    <button onclick="switchTab(1)">Spec</button>
-    <button onclick="switchTab(2)">Build</button>
-    <button onclick="switchTab(3)">Review</button>
+  <div class="tab-bar" role="tablist">
+    <button class="active" onclick="switchTab(0)" role="tab">Ideation</button>
+    <button onclick="switchTab(1)" role="tab">Spec</button>
+    <button onclick="switchTab(2)" role="tab">Build</button>
+    <button onclick="switchTab(3)" role="tab">Review</button>
   </div>
 
   <!-- 4-panel grid -->
@@ -254,8 +457,8 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
         <span id="phase-label" style="color:var(--accent);font-size:10px;"></span>
       </div>
       <div class="panel-body" id="assembly-feed">
-        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 20px;">
-          Assembly personas will appear here during ideation.
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;line-height:1.7;">
+          AI personas will debate your problem here,<br>converging on a product spec.
         </div>
       </div>
     </div>
@@ -264,19 +467,21 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
     <div class="panel active" id="panel-1">
       <div class="panel-header">Spec</div>
       <div class="panel-body" id="spec-panel">
-        <div id="spec-placeholder">Solution spec will appear here once Assembly finishes.</div>
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;line-height:1.7;">
+          Solution spec will appear here<br>once Assembly finishes.
+        </div>
       </div>
     </div>
 
-    <!-- Panel C: Claude Feed -->
+    <!-- Panel C: Claude Build -->
     <div class="panel active" id="panel-2">
       <div class="panel-header">
         <span>Claude Build</span>
         <span id="iter-label" style="color:var(--muted);font-size:10px;margin-left:auto;"></span>
       </div>
       <div class="panel-body" id="claude-feed">
-        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 20px;">
-          Claude's execution feed will stream here.
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;line-height:1.7;">
+          Claude's tool calls, file writes,<br>and output will stream here.
         </div>
       </div>
     </div>
@@ -285,7 +490,9 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
     <div class="panel active" id="panel-3">
       <div class="panel-header">Reviewer</div>
       <div class="panel-body" id="reviewer-panel">
-        <div id="reviewer-placeholder">Reviewer verdicts will appear here after each build.</div>
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;line-height:1.7;">
+          QA verdicts will appear here<br>after each build iteration.
+        </div>
       </div>
     </div>
 
@@ -296,17 +503,23 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
     <!-- Human input banner (shown when AWAITING_HUMAN) -->
     <div id="human-banner">
       <p id="human-reason">Reviewer needs your input.</p>
-      <input id="human-input" type="text" placeholder="Type your guidance for Claude..." />
+      <input id="human-input" type="text" placeholder="Type your guidance for Claude..." aria-label="Human guidance input" />
       <button class="btn btn-orange" onclick="sendHumanInput()">Send Guidance</button>
     </div>
 
     <!-- Problem input -->
-    <textarea id="problem-input" placeholder="Describe the problem or product you want to build...&#10;&#10;E.g. 'A habit tracker with daily streaks and a minimal dark UI'"></textarea>
+    <label for="problem-input" style="display:none;">Problem description</label>
+    <textarea
+      id="problem-input"
+      aria-label="Describe the problem or product you want to build"
+      placeholder="Describe the problem or product you want to build...  e.g. 'A habit tracker with daily streaks and a minimal dark UI'"
+    ></textarea>
+    <div id="input-error" role="alert">Please describe your problem first.</div>
 
     <!-- Controls -->
-    <div class="footer-top">
-      <label>Mode</label>
-      <select id="mode-select">
+    <div class="footer-controls">
+      <label for="mode-select">Mode</label>
+      <select id="mode-select" aria-label="Pipeline mode">
         <option value="fast">Fast (quick)</option>
         <option value="medium" selected>Medium (balanced)</option>
         <option value="standard">Standard (thorough)</option>
@@ -314,18 +527,21 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
       </select>
 
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-        <input type="checkbox" id="auto-approve" style="cursor:pointer;" />
+        <input type="checkbox" id="auto-approve" style="cursor:pointer;" aria-label="Auto-approve spec" />
         Auto-approve spec
       </label>
 
-      <button class="btn btn-primary" id="start-btn" onclick="startPipeline()">Start Pipeline</button>
+      <button class="btn btn-primary" id="start-btn" onclick="startPipeline()" aria-label="Start pipeline">
+        Start Pipeline
+      </button>
+      <span id="loading-hint">Connecting...</span>
     </div>
   </footer>
 
 </div>
 
 <!-- Lightbox -->
-<div id="lightbox" onclick="closeLightbox()">
+<div id="lightbox" onclick="closeLightbox()" role="dialog" aria-label="Screenshot preview">
   <img id="lightbox-img" src="" alt="screenshot" />
 </div>
 
@@ -335,7 +551,9 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 let _sessionId = null;
 let _evtSource = null;
 let _state = 'idle';
-const _reviewers = {};  // name → card element
+const _reviewers = {};
+let _sessionData = {};
+let _builtAppUrl = null;
 
 // ── Tab switching (mobile) ────────────────────────────────────────────────────
 function switchTab(idx) {
@@ -343,15 +561,97 @@ function switchTab(idx) {
   document.querySelectorAll('.tab-bar button').forEach((b, i) => b.classList.toggle('active', i === idx));
 }
 
+// ── Session history ───────────────────────────────────────────────────────────
+async function loadSessionHistory() {
+  try {
+    const res = await fetch('/pipeline/sessions/list');
+    const sessions = await res.json();
+    const picker = document.getElementById('session-picker');
+    // Keep the placeholder option, replace the rest
+    while (picker.options.length > 1) picker.remove(1);
+    sessions.slice(0, 10).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.session_id;
+      const name = s.convergence_output?.product_name || s.problem?.slice(0, 30) || s.session_id;
+      const state = s.state;
+      opt.textContent = `#${s.session_id} · ${name} (${state})`;
+      picker.appendChild(opt);
+    });
+  } catch(e) { /* best effort */ }
+}
+
+async function loadSession(sessionId) {
+  if (!sessionId) return;
+  const picker = document.getElementById('session-picker');
+  picker.value = '';
+
+  try {
+    const res = await fetch(`/pipeline/${sessionId}`);
+    if (!res.ok) return;
+    const d = await res.json();
+    _sessionId = sessionId;
+    _sessionData = d;
+    _builtAppUrl = null;
+
+    document.getElementById('session-id').textContent = `#${sessionId}`;
+    clearPanels();
+    setStatus(d.state);
+
+    // Restore spec
+    if (d.convergence_output) {
+      renderSpec(d.convergence_output);
+      updateOverviewDisplay(d.convergence_output);
+    }
+
+    // Restore costs
+    if (d.costs) {
+      updateCostDisplay(d.costs);
+      updateCostBadge(d.costs.total_cost_usd);
+    }
+
+    // Restore timing
+    if (d.timing) updateTimingDisplay(d.timing, d.created_at, d.iteration_count);
+
+    // Restore reviewer verdicts
+    if (d.reviewer_verdicts?.length) {
+      const last = d.reviewer_verdicts[d.reviewer_verdicts.length - 1];
+      last.verdicts.forEach(v => upsertReviewerCard(v.persona, v.verdict, v.reasoning, v.follow_up));
+      setAggregateVerdict(last.aggregate, last.follow_up_notes?.join('\n') || '', last.iteration);
+      updateReviewerDetailDisplay(d.reviewer_verdicts);
+    }
+
+    // Reconnect SSE if still running
+    if (!['complete', 'error', 'awaiting_human'].includes(d.state)) {
+      connectSSE();
+    }
+  } catch(e) { console.error('Failed to load session:', e); }
+}
+
 // ── Start pipeline ────────────────────────────────────────────────────────────
 async function startPipeline() {
-  const problem = document.getElementById('problem-input').value.trim();
-  if (!problem) { alert('Please describe your problem first.'); return; }
+  const textarea = document.getElementById('problem-input');
+  const errorEl = document.getElementById('input-error');
+  const problem = textarea.value.trim();
+
+  if (!problem) {
+    textarea.classList.add('error');
+    errorEl.classList.add('visible');
+    textarea.focus();
+    textarea.addEventListener('input', () => {
+      textarea.classList.remove('error');
+      errorEl.classList.remove('visible');
+    }, { once: true });
+    return;
+  }
 
   const mode = document.getElementById('mode-select').value;
   const autoApprove = document.getElementById('auto-approve').checked;
+  const btn = document.getElementById('start-btn');
+  const hint = document.getElementById('loading-hint');
 
-  document.getElementById('start-btn').disabled = true;
+  btn.disabled = true;
+  hint.classList.add('visible');
+  _builtAppUrl = null;
 
   try {
     const res = await fetch('/pipeline/start', {
@@ -361,42 +661,60 @@ async function startPipeline() {
     });
     if (!res.ok) {
       const err = await res.json();
-      alert('Error: ' + (err.detail || res.statusText));
-      document.getElementById('start-btn').disabled = false;
+      showInputError(err.detail || res.statusText);
+      btn.disabled = false;
+      hint.classList.remove('visible');
       return;
     }
     const data = await res.json();
     _sessionId = data.session_id;
     document.getElementById('session-id').textContent = `#${_sessionId}`;
 
-    // Clear panels
     clearPanels();
     connectSSE();
+    loadSessionHistory();
   } catch (e) {
-    alert('Failed to start: ' + e.message);
-    document.getElementById('start-btn').disabled = false;
+    showInputError('Failed to start: ' + e.message);
+    btn.disabled = false;
+    hint.classList.remove('visible');
   }
+}
+
+function showInputError(msg) {
+  const el = document.getElementById('input-error');
+  el.textContent = msg;
+  el.classList.add('visible');
+  document.getElementById('problem-input').classList.add('error');
 }
 
 function clearPanels() {
   document.getElementById('assembly-feed').innerHTML = '';
-  document.getElementById('spec-panel').innerHTML = '<div id="spec-placeholder">Waiting for spec...</div>';
+  document.getElementById('spec-panel').innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;">Waiting for spec...</div>';
   document.getElementById('claude-feed').innerHTML = '';
-  document.getElementById('reviewer-panel').innerHTML = '<div id="reviewer-placeholder">Waiting for review...</div>';
+  document.getElementById('reviewer-panel').innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;">Waiting for review...</div>';
   document.getElementById('human-banner').style.display = 'none';
+  document.getElementById('cost-badge').classList.remove('visible');
+  document.getElementById('iter-label').textContent = '';
   Object.keys(_reviewers).forEach(k => delete _reviewers[k]);
+
+  // Reset drawer
+  setText('timing-started', '—');
+  setText('timing-ideation', '—');
+  setText('timing-build', '—');
+  setText('timing-iters', '—');
+  updateCostDisplay({ claude_cost_usd:0, claude_input_tokens:0, claude_output_tokens:0, openai_tokens_used:0, openai_cost_usd:0, total_cost_usd:0 });
+  document.getElementById('info-overview').innerHTML = '<div style="color:var(--muted);font-size:11px;">Waiting for spec...</div>';
+  document.getElementById('info-reviewer-detail').innerHTML = '<div style="color:var(--muted);font-size:11px;">No verdicts yet.</div>';
 }
 
 // ── SSE connection ────────────────────────────────────────────────────────────
 function connectSSE() {
   if (_evtSource) _evtSource.close();
   _evtSource = new EventSource(`/pipeline/stream/${_sessionId}`);
-
   _evtSource.onmessage = e => {
     try { handleEvent(JSON.parse(e.data)); } catch(ex) { console.error(ex); }
   };
   _evtSource.onerror = () => {
-    // Auto-reconnect if pipeline is still running
     if (_state !== 'complete' && _state !== 'error') {
       setTimeout(connectSSE, 3000);
     }
@@ -409,18 +727,22 @@ function handleEvent(ev) {
 
     case 'state_change':
       setStatus(ev.new);
+      if (ev.new === 'building') {
+        document.getElementById('loading-hint').classList.remove('visible');
+      }
       break;
 
-    // Assembly events ──────────────────────────────────────────────────────────
+    // Assembly events
     case 'message':
       addAssemblyMessage(ev.speaker, ev.archetype, ev.content, false);
       break;
     case 'phase_start':
       addPhaseDivider(ev.goal || ev.phase_id);
       document.getElementById('phase-label').textContent = ev.phase_id || '';
+      setText('timing-started', new Date().toLocaleTimeString());
       break;
     case 'phase_complete':
-      addPhaseDivider(`✓ ${ev.phase_id}`);
+      addPhaseDivider('✓ ' + ev.phase_id);
       break;
     case 'mediator_intervention':
       addAssemblyMessage(ev.speaker || 'Mediator', 'Socratic Mediator', ev.content, true);
@@ -429,46 +751,59 @@ function handleEvent(ev) {
       addIdeaPill(ev.title, ev.status);
       break;
 
-    // Spec ready ───────────────────────────────────────────────────────────────
+    // Spec ready
     case 'spec_ready':
       renderSpec(ev.spec);
+      updateOverviewDisplay(ev.spec);
       break;
 
-    // Build events ─────────────────────────────────────────────────────────────
+    // Build events
     case 'build_start':
       document.getElementById('iter-label').textContent = `Iteration ${ev.iteration}`;
+      setText('timing-iters', String(ev.iteration));
       addClaudeFeedItem('status', `Build iteration ${ev.iteration} started`, '');
       break;
     case 'claude_feed':
       handleClaudeEvent(ev.event);
       break;
 
-    // Reviewer events ──────────────────────────────────────────────────────────
+    // Cost update
+    case 'cost_update':
+      updateCostDisplay(ev.costs);
+      updateCostBadge(ev.costs.total_cost_usd);
+      break;
+
+    // Reviewer events
     case 'review_result':
       upsertReviewerCard(ev.persona, ev.verdict, ev.reasoning, ev.follow_up);
       break;
     case 'aggregate_verdict':
       setAggregateVerdict(ev.verdict, ev.follow_up_prompt, ev.iteration);
+      fetchAndUpdateDrawer();
       break;
 
-    // Pivotal moments ──────────────────────────────────────────────────────────
+    // Pivotal moments
     case 'pivotal_moment':
       if (ev.moment === 'human_input_needed' || ev.moment === 'max_iterations_hit') {
         showHumanBanner(ev.message);
       }
       break;
 
-    // Terminal ─────────────────────────────────────────────────────────────────
+    // Terminal
     case 'pipeline_complete':
       setStatus('complete');
       addClaudeFeedItem('done', 'Pipeline complete!', '');
       document.getElementById('start-btn').disabled = false;
+      document.getElementById('loading-hint').classList.remove('visible');
       if (_evtSource) { _evtSource.close(); _evtSource = null; }
+      fetchAndUpdateDrawer();
+      loadSessionHistory();
       break;
     case 'error':
       setStatus('error');
       addClaudeFeedItem('error', 'Error', ev.message);
       document.getElementById('start-btn').disabled = false;
+      document.getElementById('loading-hint').classList.remove('visible');
       if (_evtSource) { _evtSource.close(); _evtSource = null; }
       break;
   }
@@ -480,6 +815,15 @@ function handleClaudeEvent(ev) {
   switch (ev.type) {
     case 'tool':
       addClaudeFeedItem('tool', ev.name, ev.summary || '');
+      // Detect file write to static/ and show view link
+      if (ev.name === 'Write' || ev.name === 'MultiEdit') {
+        const path = ev.input?.file_path || '';
+        if (path.includes('static/') && path.endsWith('.html') && !_builtAppUrl) {
+          const filename = path.split('/').pop();
+          _builtAppUrl = `/static/${filename}`;
+          addViewAppLink(_builtAppUrl, filename);
+        }
+      }
       break;
     case 'tool_result':
       if (ev.is_error) addClaudeFeedItem('error', ev.name, ev.content);
@@ -508,17 +852,14 @@ function handleClaudeEvent(ev) {
       break;
     }
     case 'image': {
-      const img = document.createElement('img');
-      img.src = ev.url;
-      img.style.maxWidth = '100%';
-      img.style.borderRadius = '4px';
-      img.style.cursor = 'zoom-in';
-      img.onclick = () => openLightbox(ev.url);
       const wrap = document.createElement('div');
       wrap.className = 'feed-item fi-image';
       const lbl = document.createElement('div');
       lbl.className = 'fi-label';
       lbl.textContent = 'Screenshot';
+      const img = document.createElement('img');
+      img.src = ev.url;
+      img.onclick = () => openLightbox(ev.url);
       wrap.appendChild(lbl);
       wrap.appendChild(img);
       const feed = document.getElementById('claude-feed');
@@ -530,6 +871,18 @@ function handleClaudeEvent(ev) {
       addClaudeFeedItem('status', 'Status', ev.message);
       break;
   }
+}
+
+function addViewAppLink(url, filename) {
+  const feed = document.getElementById('claude-feed');
+  const a = document.createElement('a');
+  a.className = 'view-app-link';
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.innerHTML = `<span>🚀</span><span>View built app — ${esc(filename)}</span><span style="margin-left:auto;opacity:.6;">↗</span>`;
+  feed.appendChild(a);
+  feed.scrollTop = feed.scrollHeight;
 }
 
 function addClaudeFeedItem(type, label, body) {
@@ -569,7 +922,7 @@ function addIdeaPill(title, status) {
   const feed = document.getElementById('assembly-feed');
   const pill = document.createElement('span');
   pill.className = 'idea-pill';
-  pill.textContent = `💡 ${title}`;
+  pill.textContent = '💡 ' + title;
   if (status === 'rejected') pill.style.opacity = '0.5';
   feed.appendChild(pill);
   feed.scrollTop = feed.scrollHeight;
@@ -580,53 +933,27 @@ function renderSpec(spec) {
   if (!spec) return;
   const panel = document.getElementById('spec-panel');
   const approveEnabled = _state === 'spec_review';
-
   panel.innerHTML = `
     <div class="spec-card">
       <h2>${esc(spec.product_name || 'Product')}</h2>
       <div class="pitch">${esc(spec.one_sentence_pitch || '')}</div>
-
       <div class="spec-section">
         <div class="label">Target User</div>
         <div class="value">${esc(spec.target_user_icp || '')}</div>
       </div>
-
       <div class="spec-section">
         <div class="label">MVP Features</div>
         <ul>${(spec.mvp_bullets||[]).map(b=>`<li>${esc(b)}</li>`).join('')}</ul>
       </div>
-
-      ${spec.monetization_model ? `
-      <div class="spec-section">
-        <div class="label">Monetization</div>
-        <div class="value">${esc(spec.monetization_model)}</div>
-      </div>` : ''}
-
-      ${spec.key_differentiator ? `
-      <div class="spec-section">
-        <div class="label">Differentiator</div>
-        <div class="value">${esc(spec.key_differentiator)}</div>
-      </div>` : ''}
-
-      ${(spec.what_we_are_not_doing||[]).length ? `
-      <div class="spec-section">
-        <div class="label">Out of scope</div>
-        <ul>${spec.what_we_are_not_doing.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>
-      </div>` : ''}
-
-      ${(spec.risks_unknowns||[]).length ? `
-      <div class="spec-section">
-        <div class="label">Risks</div>
-        <ul>${spec.risks_unknowns.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>
-      </div>` : ''}
-
-      <button id="approve-btn" class="btn btn-green ${approveEnabled?'':'hidden'}"
-        onclick="approveSpec()" ${approveEnabled?'':'style="display:none"'}>
+      ${spec.monetization_model ? `<div class="spec-section"><div class="label">Monetization</div><div class="value">${esc(spec.monetization_model)}</div></div>` : ''}
+      ${spec.key_differentiator ? `<div class="spec-section"><div class="label">Differentiator</div><div class="value">${esc(spec.key_differentiator)}</div></div>` : ''}
+      ${(spec.what_we_are_not_doing||[]).length ? `<div class="spec-section"><div class="label">Out of scope</div><ul>${spec.what_we_are_not_doing.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+      ${(spec.risks_unknowns||[]).length ? `<div class="spec-section"><div class="label">Risks</div><ul>${spec.risks_unknowns.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}
+      <button id="approve-btn" class="btn btn-green" onclick="approveSpec()" style="display:${approveEnabled?'block':'none'}">
         Approve Spec &amp; Build
       </button>
     </div>
   `;
-  // Store spec on window for approval
   window._pendingSpec = spec;
 }
 
@@ -652,20 +979,17 @@ async function approveSpec() {
 
 // ── Reviewer panel ────────────────────────────────────────────────────────────
 function upsertReviewerCard(persona, verdict, reasoning, followUp) {
-  // Remove placeholder
-  const ph = document.getElementById('reviewer-placeholder');
-  if (ph) ph.remove();
-
   const panel = document.getElementById('reviewer-panel');
-  let card = _reviewers[persona];
+  // Clear placeholder on first card
+  if (!Object.keys(_reviewers).length) panel.innerHTML = '';
 
+  let card = _reviewers[persona];
   if (!card) {
     card = document.createElement('div');
     card.className = 'reviewer-card';
     panel.insertBefore(card, panel.querySelector('.aggregate-block'));
     _reviewers[persona] = card;
   }
-
   card.innerHTML = `
     <div class="rc-header">
       <span class="rc-name">${esc(persona)}</span>
@@ -696,7 +1020,6 @@ function showHumanBanner(reason) {
   const banner = document.getElementById('human-banner');
   banner.style.display = 'block';
   document.getElementById('human-reason').textContent = reason || 'Reviewer needs your input.';
-  // Switch to build tab on mobile
   switchTab(2);
 }
 
@@ -704,7 +1027,6 @@ async function sendHumanInput() {
   const msg = document.getElementById('human-input').value.trim();
   if (!msg) { alert('Please type your guidance.'); return; }
   if (!_sessionId) return;
-
   try {
     const res = await fetch(`/pipeline/${_sessionId}/human_input`, {
       method: 'POST',
@@ -718,9 +1040,7 @@ async function sendHumanInput() {
       const err = await res.json();
       alert('Error: ' + (err.detail || res.statusText));
     }
-  } catch(e) {
-    alert('Failed: ' + e.message);
-  }
+  } catch(e) { alert('Failed: ' + e.message); }
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -728,11 +1048,121 @@ function setStatus(state) {
   _state = state;
   const dot = document.getElementById('status-dot');
   dot.className = `status-dot ${state}`;
-  document.getElementById('state-label').textContent = state.replace('_', ' ');
+  const label = document.getElementById('state-label');
+  label.className = state;
+  label.textContent = state.replace(/_/g, ' ');
 
-  // Show approve button when spec_review
+  // Show approve button only during spec_review
   const approveBtn = document.getElementById('approve-btn');
-  if (approveBtn) approveBtn.style.display = state === 'spec_review' ? '' : 'none';
+  if (approveBtn) approveBtn.style.display = state === 'spec_review' ? 'block' : 'none';
+}
+
+// ── Info drawer ───────────────────────────────────────────────────────────────
+function openInfoDrawer() {
+  document.getElementById('info-overlay').classList.add('open');
+  document.getElementById('info-drawer').classList.add('open');
+  if (_sessionId) fetchAndUpdateDrawer();
+}
+function closeInfoDrawer() {
+  document.getElementById('info-overlay').classList.remove('open');
+  document.getElementById('info-drawer').classList.remove('open');
+}
+function toggleSection(titleEl) {
+  titleEl.classList.toggle('collapsed');
+  titleEl.nextElementSibling.classList.toggle('collapsed');
+}
+
+async function fetchAndUpdateDrawer() {
+  if (!_sessionId) return;
+  try {
+    const res = await fetch(`/pipeline/${_sessionId}`);
+    if (!res.ok) return;
+    const d = await res.json();
+    _sessionData = d;
+    updateOverviewDisplay(d.convergence_output || d.spec);
+    if (d.costs) { updateCostDisplay(d.costs); updateCostBadge(d.costs.total_cost_usd); }
+    if (d.timing) updateTimingDisplay(d.timing, d.created_at, d.iteration_count);
+    updateReviewerDetailDisplay(d.reviewer_verdicts || []);
+  } catch(e) { /* best effort */ }
+}
+
+// ── Drawer data helpers ───────────────────────────────────────────────────────
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function updateOverviewDisplay(spec) {
+  if (!spec) return;
+  const el = document.getElementById('info-overview');
+  el.innerHTML = `
+    <div style="margin-bottom:8px;">
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px;">${esc(spec.product_name||'')}</div>
+      <div style="font-size:11px;color:var(--accent2);font-style:italic;">${esc(spec.one_sentence_pitch||'')}</div>
+    </div>
+    ${spec.target_user_icp ? `<div class="info-row"><span class="lbl">Target user</span><span class="val" style="text-align:right;max-width:60%;font-size:10px;white-space:normal;">${esc(spec.target_user_icp.slice(0,100))}</span></div>` : ''}
+    ${(spec.mvp_bullets||[]).length ? `
+      <div style="margin-top:8px;">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">MVP Features</div>
+        <ul class="info-mvp-list">${spec.mvp_bullets.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>
+      </div>` : ''}
+    ${spec.key_differentiator ? `<div style="margin-top:8px;font-size:11px;color:var(--muted);">Differentiator: <span style="color:var(--text);">${esc(spec.key_differentiator.slice(0,120))}</span></div>` : ''}
+  `;
+}
+
+function updateCostDisplay(costs) {
+  setText('cost-openai', costs.openai_cost_usd > 0 ? `$${costs.openai_cost_usd.toFixed(4)}` : '—');
+  setText('tokens-openai', costs.openai_tokens_used > 0 ? costs.openai_tokens_used.toLocaleString() : '—');
+  setText('cost-claude', costs.claude_cost_usd > 0 ? `$${costs.claude_cost_usd.toFixed(4)}` : '—');
+  setText('tokens-claude-in', costs.claude_input_tokens > 0 ? costs.claude_input_tokens.toLocaleString() : '—');
+  setText('tokens-claude-out', costs.claude_output_tokens > 0 ? costs.claude_output_tokens.toLocaleString() : '—');
+  setText('cost-total', costs.total_cost_usd > 0 ? `$${costs.total_cost_usd.toFixed(4)}` : '—');
+}
+
+function updateCostBadge(total) {
+  const badge = document.getElementById('cost-badge');
+  if (total > 0) {
+    badge.textContent = `~$${total.toFixed(3)}`;
+    badge.classList.add('visible');
+  }
+}
+
+function updateTimingDisplay(timing, createdAt, iterCount) {
+  if (createdAt) setText('timing-started', new Date(createdAt).toLocaleTimeString());
+  if (timing.ideation_ms != null) setText('timing-ideation', fmtMs(timing.ideation_ms));
+  if (timing.build_ms != null) setText('timing-build', fmtMs(timing.build_ms));
+  if (iterCount != null) setText('timing-iters', String(iterCount));
+}
+
+function fmtMs(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms/1000).toFixed(1)}s`;
+  return `${Math.floor(ms/60000)}m ${Math.floor((ms%60000)/1000)}s`;
+}
+
+function updateReviewerDetailDisplay(allVerdicts) {
+  const el = document.getElementById('info-reviewer-detail');
+  if (!allVerdicts.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;">No verdicts yet.</div>';
+    return;
+  }
+  el.innerHTML = allVerdicts.map(rv => `
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">
+        Iteration ${rv.iteration} — <span class="verdict-badge verdict-${rv.aggregate}">${rv.aggregate}</span>
+      </div>
+      ${(rv.verdicts||[]).map(v => `
+        <div class="info-verdict-row">
+          <div class="iv-header">
+            <span class="iv-name">${esc(v.persona)}</span>
+            <span class="verdict-badge verdict-${v.verdict}">${v.verdict}</span>
+          </div>
+          <div class="iv-text">${esc(v.reasoning||'')}</div>
+          ${v.follow_up ? `<div style="font-size:11px;color:var(--accent2);margin-top:2px;">→ ${esc(v.follow_up)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -749,6 +1179,9 @@ function openLightbox(src) {
 function closeLightbox() {
   document.getElementById('lightbox').classList.remove('open');
 }
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadSessionHistory();
 </script>
 </body>
 </html>

@@ -91,9 +91,20 @@ class PipelineSession:
     # Notification log
     notifications_sent: list = field(default_factory=list)
 
+    # Cost & usage tracking
+    claude_cost_usd: float = 0.0
+    claude_input_tokens: int = 0
+    claude_output_tokens: int = 0
+    openai_tokens_used: int = 0          # from Assembly turn_complete events
+    openai_cost_usd: float = 0.0         # estimated from tokens
+
     # Timing
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
+    ideation_started_at: Optional[str] = None
+    ideation_finished_at: Optional[str] = None
+    build_started_at: Optional[str] = None
+    build_finished_at: Optional[str] = None
 
     # Runtime (not persisted) ────────────────────────────────────────────
     event_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
@@ -105,6 +116,19 @@ class PipelineSession:
         self.updated_at = _now_iso()
 
     def to_summary(self) -> dict:
+        ideation_ms = None
+        if self.ideation_started_at and self.ideation_finished_at:
+            from datetime import datetime, timezone
+            s = datetime.fromisoformat(self.ideation_started_at)
+            e = datetime.fromisoformat(self.ideation_finished_at)
+            ideation_ms = int((e - s).total_seconds() * 1000)
+        build_ms = None
+        if self.build_started_at and self.build_finished_at:
+            from datetime import datetime, timezone
+            s = datetime.fromisoformat(self.build_started_at)
+            e = datetime.fromisoformat(self.build_finished_at)
+            build_ms = int((e - s).total_seconds() * 1000)
+
         return {
             "session_id": self.session_id,
             "problem": self.problem,
@@ -117,6 +141,22 @@ class PipelineSession:
             "notifications_sent": self.notifications_sent,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "costs": {
+                "claude_cost_usd": round(self.claude_cost_usd, 4),
+                "claude_input_tokens": self.claude_input_tokens,
+                "claude_output_tokens": self.claude_output_tokens,
+                "openai_tokens_used": self.openai_tokens_used,
+                "openai_cost_usd": round(self.openai_cost_usd, 4),
+                "total_cost_usd": round(self.claude_cost_usd + self.openai_cost_usd, 4),
+            },
+            "timing": {
+                "ideation_ms": ideation_ms,
+                "build_ms": build_ms,
+                "ideation_started_at": self.ideation_started_at,
+                "ideation_finished_at": self.ideation_finished_at,
+                "build_started_at": self.build_started_at,
+                "build_finished_at": self.build_finished_at,
+            },
         }
 
 
@@ -169,6 +209,7 @@ class Pipeline:
 
     async def _run_ideation(self) -> None:
         self._set_state(PipelineState.IDEATING)
+        self.s.ideation_started_at = _now_iso()
         loop = asyncio.get_event_loop()
 
         emitter = DashboardEventEmitter(queue=self.s.event_queue, loop=loop)
@@ -200,6 +241,21 @@ class Pipeline:
         else:
             self.s.ideas = result if isinstance(result, list) else []
             self.s.convergence_output = {}
+
+        self.s.ideation_finished_at = _now_iso()
+
+        # Tally OpenAI tokens from Assembly turn_complete events in the queue snapshot
+        # GPT-4o-mini pricing: ~$0.15/1M input, $0.60/1M output (blended ~$0.30/1M)
+        _OPENAI_COST_PER_TOKEN = 0.30 / 1_000_000
+        try:
+            items = list(self.s.event_queue._queue)  # type: ignore[attr-defined]
+            for item in items:
+                if item.get("type") == "turn_complete":
+                    tok = item.get("tokens_used") or 0
+                    self.s.openai_tokens_used += tok
+            self.s.openai_cost_usd = self.s.openai_tokens_used * _OPENAI_COST_PER_TOKEN
+        except Exception:
+            pass
 
         if not self.s.convergence_output:
             raise RuntimeError(
@@ -242,6 +298,7 @@ class Pipeline:
     # ── Phase: BUILD LOOP ──────────────────────────────────────────────────────
 
     async def _run_build_loop(self) -> None:
+        self.s.build_started_at = _now_iso()
         while True:
             self.s.iteration_count += 1
             prompt = self._build_current_prompt()
@@ -291,6 +348,7 @@ class Pipeline:
             await self._handle_verdict(review)
 
             if self.s.state in (PipelineState.COMPLETE, PipelineState.AWAITING_HUMAN):
+                self.s.build_finished_at = _now_iso()
                 break
             # ITERATING → loop back to BUILDING
 
@@ -326,6 +384,18 @@ class Pipeline:
                 events.append(event)
                 self._emit({"type": "claude_feed", "event": event})
 
+                if event.get("type") == "usage":
+                    self.s.claude_cost_usd += event.get("total_cost_usd") or 0.0
+                    self.s.claude_input_tokens += event.get("input_tokens") or 0
+                    self.s.claude_output_tokens += event.get("output_tokens") or 0
+                    self._emit({"type": "cost_update", "costs": {
+                        "claude_cost_usd": round(self.s.claude_cost_usd, 4),
+                        "claude_input_tokens": self.s.claude_input_tokens,
+                        "claude_output_tokens": self.s.claude_output_tokens,
+                        "openai_tokens_used": self.s.openai_tokens_used,
+                        "openai_cost_usd": round(self.s.openai_cost_usd, 4),
+                        "total_cost_usd": round(self.s.claude_cost_usd + self.s.openai_cost_usd, 4),
+                    }})
                 if event.get("type") == "rate_limited":
                     await self._handle_rate_limited(event)
 
