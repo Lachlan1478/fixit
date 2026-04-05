@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CoreFlow Spec Kit: Todo — Classroom Edition</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --brand:#1D4ED8; --brand-light:#3B82F6; --brand-dark:#1E3A8A; --brand-surf:#EFF6FF;
+      --accent:#7C3AED; --success:#059669; --success-bg:#ECFDF5;
+      --warning:#D97706; --warning-bg:#FFFBEB; --error:#DC2626; --error-bg:#FEF2F2;
+      --ink:#111827; --ink-2:#374151; --ink-muted:#6B7280; --ink-faint:#9CA3AF;
+      --border:#E5E7EB; --surface:#F9FAFB; --raised:#FFFFFF;
+      --code-bg:#0F172A; --code-text:#E2E8F0; --code-comment:#64748B;
+      --code-kw:#93C5FD; --code-str:#86EFAC; --code-fn:#FDE68A; --code-num:#FCA5A5;
+      --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+      --mono:'Cascadia Code','Fira Code',Consolas,'Courier New',monospace;
+      --r-sm:6px; --r-md:10px; --r-lg:16px; --r-xl:20px;
+      --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:20px;--s6:24px;--s8:32px;--s10:40px;--s12:48px;--s16:64px;
+      --nav-h:58px; --sh-sm:0 1px 3px rgba(0,0,0,.07); --sh-md:0 4px 12px rgba(0,0,0,.10); --sh-lg:0 16px 40px rgba(0,0,0,.12);
+    }
+    html{font-size:16px;scroll-behavior:smooth;}
+    body{font-family:var(--sans);color:var(--ink);background:var(--surface);line-height:1.65;min-height:100vh;}
+
+    /* NAV */
+    .main-nav{position:sticky;top:0;z-index:200;background:var(--brand-dark);display:flex;align-items:center;height:var(--nav-h);padding:0 var(--s5);gap:var(--s3);box-shadow:var(--sh-md);}
+    .nav-brand{font-size:1rem;font-weight:800;color:#fff;white-space:nowrap;flex-shrink:0;margin-right:var(--s3);}
+    .nav-brand span{color:#93C5FD;}
+    .nav-tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1;}
+    .nav-tabs::-webkit-scrollbar{display:none;}
+    .tab-btn{background:transparent;border:none;color:rgba(255,255,255,.6);font-family:var(--sans);font-size:.78rem;font-weight:500;padding:var(--s2) var(--s3);border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;transition:color .15s,background .15s;}
+    .tab-btn:hover{color:#fff;background:rgba(255,255,255,.1);}
+    .tab-btn.active{color:#fff;background:var(--brand-light);}
+
+    /* TABS */
+    .tab-panel{display:none;min-height:calc(100vh - var(--nav-h));}
+    .tab-panel.active{display:block;}
+
+    /* TYPOGRAPHY */
+    h1,h2,h3,h4{font-weight:700;line-height:1.2;color:var(--ink);}
+    h1{font-size:2.4rem;}h2{font-size:1.65rem;}h3{font-size:1.15rem;}
+    p{margin-bottom:var(--s4);}p:last-child{margin-bottom:0;}
+    strong{font-weight:600;}a{color:var(--brand);}
+    code{font-family:var(--mono);background:var(--brand-surf);color:var(--brand);padding:1px 5px;border-radius:var(--r-sm);font-size:.87em;}
+
+    /* LAYOUT */
+    .container{max-width:860px;margin:0 auto;padding:var(--s8) var(--s6);}
+    .container-wide{max-width:1060px;margin:0 auto;padding:var(--s8) var(--s6);}
+    .card{background:var(--raised);border:1px solid var(--border);border-radius:var(--r-lg);padding:var(--s6);box-shadow:var(--sh-sm);}
+    .two-col{display:grid;grid-template-columns:1fr 1fr;gap:var(--s5);}
+    @media(max-width:620px){.two-col{grid-template-columns:1fr;}}
+    .badge{display:inline-flex;align-items:center;gap:3px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;padding:2px var(--s2);border-radius:99px;}
+    .b-blue{background:var(--brand-surf);color:var(--brand);}
+    .b-green{background:var(--success-bg);color:var(--success);}
+    .b-purple{background:#F5F3FF;color:var(--accent);}
+    .b-amber{background:var(--warning-bg);color:var(--warning);}
+    .b-red{background:var(--error-bg);color:var(--error);}
+
+    /* CALLOUTS */
+    .callout{border-radius:var(--r-md);padding:var(--s4) var(--s5);margin:var(--s4) 0;display:flex;gap:var(--s3);}
+    .callout-icon{font-size:1.1rem;flex-shrink:0;line-height:1.6;}
+    .callout-body{flex:1;}
+    .callout-title{font-weight:700;font-size:.88rem;margin-bottom:var(--s1);}
+    .cl-blue{background:var(--brand-surf);border-left:4px solid var(--brand-light);}
+    .cl-green{background:var(--success-bg);border-left:4px solid var(--success);}
+    .cl-amber{background:var(--warning-bg);border-left:4px solid var(--warning);}
+    .cl-red{background:var(--error-bg);border-left:4px solid var(--error);}
+
+    .sec-header{border-bottom:2px solid var(--border);padding-bottom:var(--s4);margin-bottom:var(--s6);}
+    .sec-tag{font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--brand);margin-bottom:var(--s2);}
+    hr.divider{border:none;border-top:1px solid var(--border);margin:var(--s8) 0;}
+
+    /* CODE BLOCKS */
+    .code-block{background:var(--code-bg);color:var(--code-text);border-radius:var(--r-lg);padding:var(--s5) var(--s6);font-family:var(--mono);font-size:.82rem;line-height:1.8;overflow-x:auto;position:relative;margin:var(--s4) 0;}
+    .code-label{font-family:var(--sans);font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--code-comment);margin-bottom:var(--s3);}
+    .k{color:var(--code-kw);}.s{color:var(--code-str);}.c{color:var(--code-comment);font-style:italic;}.fn{color:var(--code-fn);}.n{color:var(--code-num);}
+    .bug-line{display:block;background:rgba(239,68,68,.15);border-left:3px solid #EF4444;margin:0 -24px;padding:0 24px 0 21px;}
+
+    /* TABLES */
+    .spec-table{width:100%;border-collapse:collapse;font-size:.87rem;margin:var(--s4) 0;}
+    .spec-table th{background:var(--brand-surf);color:var(--brand-dark);font-weight:700;text-align:left;padding:var(--s3) var(--s4);border-bottom:2px solid var(--brand-light);}
+    .spec-table td{padding:var(--s3) var(--s4);border-bottom:1px solid var(--border);vertical-align:top;}
+    .spec-table tr:last-child td{border-bottom:none;}
+    .spec-table tr:nth-child(even) td{background:var(--surface);}
+
+    /* SPEC FLOWS */
+    .spec-flow{background:var(--raised);border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;margin-bottom:var(--s6);}
+    .spec-flow-hd{background:var(--brand-surf);padding:var(--s4) var(--s5);display:flex;align-items:center;gap:var(--s3);border-bottom:1px solid var(--border);}
+    .flow-id{font-family:var(--mono);font-size:.72rem;font-weight:700;background:var(--brand);color:#fff;padding:2px var(--s2);border-radius:var(--r-sm);}
+    .flow-title{font-weight:700;font-size:1rem;}
+    .spec-flow-bd{padding:var(--s5);}
+    .flow-step{display:flex;gap:var(--s3);padding:var(--s2) 0;}
+    .flow-step-n{width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;font-size:.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:4px;}
+    .flow-step-t{font-size:.9rem;line-height:1.5;}
+
+    /* INVARIANT LIST */
+    .inv-list{list-style:none;margin:var(--s4) 0;}
+    .inv-list li{display:flex;gap:var(--s3);padding:var(--s3) 0;border-bottom:1px solid var(--border);font-size:.9rem;align-items:flex-start;}
+    .inv-list li:last-child{border-bottom:none;}
+    .inv-list li::before{content:'◆';color:var(--accent);flex-shrink:0;margin-top:2px;font-size:.7rem;}
+
+    /* TIMELINE */
+    .timeline{position:relative;padding-left:var(--s8);margin:var(--s4) 0;}
+    .timeline::before{content:'';position:absolute;left:9px;top:0;bottom:0;width:2px;background:var(--border);}
+    .tl-item{position:relative;padding-bottom:var(--s5);}
+    .tl-item::before{content:'';position:absolute;left:calc(-1 * var(--s8) + 4px);top:7px;width:12px;height:12px;border-radius:50%;background:var(--brand);border:2px solid #fff;box-shadow:0 0 0 2px var(--brand);}
+    .tl-time{font-size:.72rem;font-weight:700;color:var(--brand);font-family:var(--mono);margin-bottom:3px;}
+    .tl-title{font-weight:700;margin-bottom:3px;font-size:.93rem;}
+    .tl-body{font-size:.86rem;color:var(--ink-muted);}
+
+    /* SPOILER */
+    .spoiler{border:1px dashed var(--border);border-radius:var(--r-md);overflow:hidden;margin:var(--s4) 0;}
+    .spoiler-toggle{background:var(--surface);padding:var(--s3) var(--s4);cursor:pointer;font-size:.85rem;font-weight:600;color:var(--brand);display:flex;align-items:center;gap:var(--s2);border:none;width:100%;text-align:left;font-family:var(--sans);}
+    .spoiler-toggle:hover{background:var(--brand-surf);}
+    .spoiler-toggle .arrow{font-size:.6rem;transition:transform .15s;display:inline-block;}
+    .spoiler.open .spoiler-toggle .arrow{transform:rotate(90deg);}
+    .spoiler-body{display:none;padding:var(--s4);background:var(--raised);border-top:1px solid var(--border);}
+    .spoiler.open .spoiler-body{display:block;}
+
+    /* OVERVIEW */
+    #tab-overview{background:#fff;}
+    .hero-wrap{background:linear-gradient(135deg,var(--brand-dark) 0%,#1E40AF 100%);padding:var(--s16) var(--s6);text-align:center;}
+    .hero-eyebrow{font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.15em;color:#93C5FD;margin-bottom:var(--s4);}
+    .hero-wrap h1{color:#fff;font-size:3rem;margin-bottom:var(--s4);}
+    .hero-wrap h1 em{color:#93C5FD;font-style:normal;}
+    .hero-sub{font-size:1.1rem;color:rgba(255,255,255,.78);max-width:580px;margin:0 auto var(--s8);}
+    .hero-cta{display:inline-flex;align-items:center;gap:var(--s2);background:#fff;color:var(--brand-dark);font-weight:700;font-size:.95rem;padding:var(--s3) var(--s6);border-radius:999px;border:none;cursor:pointer;box-shadow:var(--sh-md);transition:transform .15s,box-shadow .15s;text-decoration:none;}
+    .hero-cta:hover{transform:translateY(-2px);box-shadow:var(--sh-lg);}
+    .kit-grid{max-width:1020px;margin:0 auto;padding:var(--s12) var(--s6);display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s5);}
+    .kit-card{background:var(--raised);border:1px solid var(--border);border-radius:var(--r-lg);padding:var(--s6);box-shadow:var(--sh-sm);}
+    .kit-icon{font-size:2rem;margin-bottom:var(--s3);display:block;}
+    .kit-card h3{margin-bottom:var(--s2);font-size:1rem;}
+    .kit-card p{font-size:.88rem;color:var(--ink-muted);margin:0;}
+    .audience-strip{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:var(--s8) var(--s6);text-align:center;}
+    .audience-strip h2{margin-bottom:var(--s4);}
+    .audience-strip p{color:var(--ink-muted);max-width:600px;margin:0 auto;font-size:.95rem;}
+    .pricing-wrap{background:var(--brand-dark);padding:var(--s12) var(--s6);text-align:center;}
+    .pricing-wrap h2{color:#fff;margin-bottom:var(--s3);}
+    .pricing-wrap > p{color:rgba(255,255,255,.7);max-width:500px;margin:0 auto var(--s8);font-size:.95rem;}
+    .pricing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:var(--s5);max-width:640px;margin:0 auto;}
+    .price-card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:var(--r-lg);padding:var(--s6);text-align:left;}
+    .price-card.featured{background:#fff;color:var(--ink);border-color:#fff;}
+    .price-lbl{font-size:.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:#93C5FD;margin-bottom:var(--s2);}
+    .price-card.featured .price-lbl{color:var(--brand);}
+    .price-amt{font-size:2.2rem;font-weight:800;color:#fff;line-height:1;}
+    .price-card.featured .price-amt{color:var(--ink);}
+    .price-per{font-size:.8rem;color:rgba(255,255,255,.55);margin-bottom:var(--s4);}
+    .price-card.featured .price-per{color:var(--ink-muted);}
+    .price-ul{list-style:none;margin:0 0 var(--s5);font-size:.84rem;}
+    .price-ul li{padding:var(--s2) 0;display:flex;gap:var(--s2);color:rgba(255,255,255,.75);}
+    .price-card.featured .price-ul li{color:var(--ink-muted);}
+    .price-ul li::before{content:'✓';color:#93C5FD;font-weight:700;flex-shrink:0;}
+    .price-card.featured .price-ul li::before{color:var(--success);}
+    .price-btn{display:block;text-align:center;padding:var(--s2) var(--s4);border-radius:var(--r-md);font-weight:700;font-size:.84rem;border:1px solid rgba(255,255,255,.3);color:#fff;background:transparent;cursor:pointer;text-decoration:none;}
+    .price-card.featured .price-btn{background:var(--brand);border-color:var(--brand);color:#fff;}
+
+    /* APP TAB */
+    #tab-app{background:linear-gradient(135deg,#EFF6FF 0%,#F5F3FF 100%);padding:var(--s10) var(--s6);}
+    .app-layout{max-width:940px;margin:0 auto;display:grid;grid-template-columns:1fr 270px;gap:var(--s6);align-items:start;}
+    @media(max-width:680px){.app-layout{grid-template-columns:1fr;}}
+    .todo-app{background:var(--raised);border-radius:var(--r-xl);overflow:hidden;box-shadow:var(--sh-lg);}
+    .todo-app-hd{background:linear-gradient(135deg,var(--brand) 0%,var(--accent) 100%);padding:var(--s5) var(--s6);color:#fff;}
+    .todo-app-hd h2{color:#fff;font-size:1.35rem;margin-bottom:2px;}
+    .todo-app-hd p{color:rgba(255,255,255,.75);font-size:.82rem;margin:0;}
+    .todo-app-bd{padding:var(--s5);}
+    .todo-form{display:flex;gap:var(--s2);margin-bottom:var(--s2);}
+    .todo-input-wrap{flex:1;position:relative;}
+    .todo-input{width:100%;padding:var(--s3) var(--s4);padding-right:52px;border:2px solid var(--border);border-radius:var(--r-md);font-family:var(--sans);font-size:.93rem;color:var(--ink);background:var(--raised);outline:none;transition:border-color .15s,box-shadow .15s;}
+    .todo-input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(59,130,246,.15);}
+    .todo-input.is-error{border-color:var(--error);}
+    .todo-input.is-error:focus{box-shadow:0 0 0 3px rgba(220,38,38,.15);}
+    .char-count{position:absolute;right:var(--s3);top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:.68rem;color:var(--ink-faint);pointer-events:none;}
+    .char-count.warn{color:var(--warning);}.char-count.over{color:var(--error);}
+    .add-btn{background:var(--brand);color:#fff;border:none;border-radius:var(--r-md);padding:var(--s3) var(--s5);font-family:var(--sans);font-size:.9rem;font-weight:700;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:var(--s2);transition:background .15s,transform .1s;}
+    .add-btn:hover{background:var(--brand-dark);}
+    .add-btn:active{transform:scale(.97);}
+    .error-banner{color:var(--error);font-size:.8rem;margin-bottom:var(--s2);display:flex;align-items:center;gap:5px;}
+    .todo-list{list-style:none;min-height:48px;}
+    .todo-item{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s2);border-bottom:1px solid var(--border);border-radius:var(--r-sm);transition:background .1s;}
+    .todo-item:hover{background:var(--surface);}
+    .todo-item:last-child{border-bottom:none;}
+    .todo-toggle-area{display:flex;align-items:center;cursor:pointer;flex-shrink:0;}
+    .todo-checkbox{position:absolute;opacity:0;width:0;height:0;}
+    .checkmark{width:20px;height:20px;border:2px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s;flex-shrink:0;}
+    .todo-checkbox:checked ~ .checkmark{background:var(--success);border-color:var(--success);}
+    .todo-checkbox:checked ~ .checkmark::after{content:'';display:block;width:5px;height:9px;border:2px solid #fff;border-top:none;border-left:none;transform:rotate(45deg) translate(-1px,-1px);}
+    .todo-checkbox:focus-visible ~ .checkmark{outline:2px solid var(--brand);outline-offset:2px;}
+    .todo-text{flex:1;font-size:.93rem;color:var(--ink);word-break:break-word;transition:color .15s,text-decoration .15s;}
+    .todo-text.done{text-decoration:line-through;color:var(--ink-muted);}
+    .del-btn{background:transparent;border:none;color:var(--ink-faint);cursor:pointer;padding:var(--s1);border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center;transition:color .15s,background .15s;flex-shrink:0;opacity:0;}
+    .todo-item:hover .del-btn,.todo-item:focus-within .del-btn{opacity:1;}
+    .del-btn:hover{color:var(--error);background:var(--error-bg);}
+    .del-btn:focus-visible{opacity:1;outline:2px solid var(--brand);}
+    .empty-state{padding:var(--s10) var(--s4);text-align:center;color:var(--ink-muted);}
+    .empty-state-icon{font-size:2.8rem;margin-bottom:var(--s3);opacity:.35;}
+    .empty-state p{font-size:.88rem;margin:0;}
+    .todo-footer{display:flex;align-items:center;justify-content:space-between;padding:var(--s3) var(--s2);border-top:1px solid var(--border);margin-top:var(--s2);}
+    .todo-counter{font-size:.8rem;color:var(--ink-muted);}
+    .todo-counter.all-done{color:var(--success);font-weight:700;}
+    .clear-done-btn{font-size:.78rem;color:var(--ink-muted);background:none;border:none;cursor:pointer;padding:2px var(--s2);border-radius:var(--r-sm);font-family:var(--sans);transition:color .15s,background .15s;}
+    .clear-done-btn:hover{color:var(--error);background:var(--error-bg);}
+    .spec-sidebar{display:flex;flex-direction:column;gap:var(--s3);}
+    .spec-ann{background:var(--raised);border:1px solid var(--border);border-left:4px solid var(--brand-light);border-radius:var(--r-md);padding:var(--s3) var(--s4);font-size:.8rem;}
+    .spec-ann-id{font-family:var(--mono);font-size:.68rem;font-weight:700;color:var(--brand);margin-bottom:3px;}
+    .spec-ann p{color:var(--ink-muted);font-size:.8rem;margin:0;}
+
+    /* EXERCISE TABS */
+    #tab-exercise-a,#tab-exercise-b{background:var(--surface);}
+    .ex-hd{background:linear-gradient(135deg,#1E293B 0%,var(--code-bg) 100%);padding:var(--s10) var(--s6);}
+    .ex-hd-inner{max-width:800px;margin:0 auto;}
+    .ex-tag{font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.13em;color:var(--code-comment);margin-bottom:var(--s3);}
+    .ex-hd h2{color:#fff;font-size:1.65rem;margin-bottom:var(--s3);}
+    .ex-hd p{color:rgba(255,255,255,.65);margin:0;max-width:580px;}
+
+    /* CHECKLIST */
+    #tab-checklist{background:var(--surface);}
+    .cl-hd{background:var(--success-bg);border-bottom:2px solid var(--success);padding:var(--s6);text-align:center;}
+    .cl-hd h2{color:var(--success);margin-bottom:var(--s2);}
+    .cl-hd p{color:var(--ink-muted);margin:0;font-size:.9rem;}
+    .cl-section{margin-bottom:var(--s8);}
+    .cl-section-title{font-size:.95rem;font-weight:800;color:var(--ink);margin-bottom:var(--s3);display:flex;align-items:center;gap:var(--s2);}
+    .cl-item{display:flex;align-items:flex-start;gap:var(--s3);padding:var(--s3) 0;border-bottom:1px solid var(--border);}
+    .cl-item:last-child{border-bottom:none;}
+    .cl-item input[type="checkbox"]{width:17px;height:17px;accent-color:var(--brand);flex-shrink:0;margin-top:3px;cursor:pointer;}
+    .cl-item label{font-size:.875rem;cursor:pointer;line-height:1.5;}
+    .cl-detail{display:block;font-size:.78rem;color:var(--ink-muted);margin-top:2px;}
+    .cl-item.is-checked label{text-decoration:line-through;color:var(--ink-muted);}
+    .cl-controls{display:flex;gap:var(--s3);margin-bottom:var(--s6);flex-wrap:wrap;align-items:center;}
+    .cl-controls button{font-size:.8rem;padding:var(--s2) var(--s4);border-radius:var(--r-sm);border:1px solid var(--border);background:var(--raised);cursor:pointer;font-family:var(--sans);color:var(--ink-muted);}
+    .cl-controls button:hover{border-color:var(--brand);color:var(--brand);}
+    .cl-score{margin-left:auto;font-size:.85rem;font-weight:700;color:var(--ink-muted);}
+
+    @media print{.main-nav{display:none!important;}.tab-panel{display:block!important;}#tab-checklist{background:#fff;}}
+  </style>
+</head>
+<body>
+
+<nav class="main-nav" role="navigation" aria-label="Kit sections">
+  <div class="nav-brand">CoreFlow <span>Spec Kit</span></div>
+  <div class="nav-tabs" role="tablist">
+    <button class="tab-btn active" role="tab" aria-selected="true"  data-tab="overview">Overview</button>
+    <button class="tab-btn"        role="tab" aria-selected="false" data-tab="app">Live App</button>
+    <button class="tab-btn"        role="tab" aria-selected="false" data-tab="spec">Spec Doc</button>
+    <button class="tab-btn"        role="tab" aria-selected="false" data-tab="guide">Instructor Guide</button>
+    <button class="tab-btn"        role="tab" aria-selected="false" data-tab="exercise-a">Exercise A: Debug</button>
+    <button class="tab-btn"        role="tab" aria-selected="false" data-tab="exercise-b">Exercise B: Extend</button>
+    <button class="tab-btn"        role="tab" aria-selected="false" data-tab="checklist">Review Checklist</button>
+  </div>
+</nav>
+
+<!-- ── OVERVIEW ── -->
+<section id="tab-overview" class="tab-panel active" role="tabpanel">
+  <div class="hero-wrap">
+    <div class="hero-eyebrow">Classroom · Vanilla JS · Rigorous</div>
+    <h1>CoreFlow <em>Spec Kit</em>: Todo</h1>
+    <p class="hero-sub">A turnkey teaching module — complete behavior spec, live implementation, instructor guide, exercises, and review checklist — for frontend fundamentals courses.</p>
+    <button class="hero-cta" onclick="switchTab('app')">▶ Open the Live App</button>
+  </div>
+  <div class="kit-grid">
+    <div class="kit-card"><span class="kit-icon">📄</span><h3>Behavior Spec</h3><p>Formal action flows, pre/postconditions, invariants, and explicit non-goals. Students have an unambiguous target — no guessing what "correct" means.</p></div>
+    <div class="kit-card"><span class="kit-icon">⚡</span><h3>Reference Implementation</h3><p>Single-file vanilla JS app with DOM-as-state architecture. Every spec rule is labelled in comments so students can trace spec IDs to code.</p></div>
+    <div class="kit-card"><span class="kit-icon">🎓</span><h3>Instructor Guide</h3><p>Learning objectives, prerequisite checklist, a 90-minute lesson plan, discussion questions, and common student mistakes to watch for.</p></div>
+    <div class="kit-card"><span class="kit-icon">🐛</span><h3>Exercise A — Debug</h3><p>A deliberately broken implementation with four spec violations. Students identify, explain, and fix each bug using the spec as their guide.</p></div>
+    <div class="kit-card"><span class="kit-icon">🔧</span><h3>Exercise B — Extend</h3><p>A scoped feature request: "Clear Completed". Students write a mini-spec first, then implement it, keeping full spec compliance.</p></div>
+    <div class="kit-card"><span class="kit-icon">✅</span><h3>Review Checklist</h3><p>Printable 28-item rubric across four categories: spec compliance, edge cases, code quality, and accessibility. Use it for peer review or grading.</p></div>
+  </div>
+  <div class="audience-strip">
+    <h2>Built for frontend instructors</h2>
+    <p>Drop this kit into any curriculum teaching vanilla JS DOM manipulation. No build tools, no frameworks, no setup. Open the HTML file, teach the spec, watch students discover what "rigorous" means in UI engineering.</p>
+  </div>
+  <div class="pricing-wrap">
+    <h2>Simple, instructor-friendly pricing</h2>
+    <p>The core kit is free forever. Course-pack licenses unlock multi-cohort bundles and institutionally-branded versions.</p>
+    <div class="pricing-grid">
+      <div class="price-card">
+        <div class="price-lbl">Free Core</div>
+        <div class="price-amt">$0</div>
+        <div class="price-per">forever, for individual use</div>
+        <ul class="price-ul">
+          <li>Full spec document</li><li>Reference implementation</li>
+          <li>Both exercises</li><li>Review checklist</li><li>Instructor guide</li>
+        </ul>
+        <a href="#" class="price-btn" onclick="switchTab('app');return false;">Get started →</a>
+      </div>
+      <div class="price-card featured">
+        <div class="price-lbl">Course-Pack License</div>
+        <div class="price-amt">$199</div>
+        <div class="price-per">per cohort · or $499/yr institution</div>
+        <ul class="price-ul">
+          <li>Everything in Free Core</li><li>Institutional branding</li>
+          <li>Multi-blueprint bundles</li><li>LMS-ready assessment rubrics</li><li>Priority instructor support</li>
+        </ul>
+        <a href="mailto:hello@coreflow.dev" class="price-btn">Contact for licensing →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── LIVE APP ── -->
+<section id="tab-app" class="tab-panel" role="tabpanel">
+  <div class="app-layout">
+    <div class="todo-app" id="todo-app">
+      <div class="todo-app-hd">
+        <h2>My Todos</h2>
+        <p>Reference implementation · DOM-as-state · Spec-compliant</p>
+      </div>
+      <div class="todo-app-bd">
+        <form class="todo-form" id="todo-form" novalidate>
+          <div class="todo-input-wrap">
+            <input type="text" class="todo-input" id="todo-input" placeholder="What needs to be done?" maxlength="200" autocomplete="off" aria-label="New todo text" aria-describedby="error-msg char-count" />
+            <span class="char-count" id="char-count" aria-live="polite" aria-atomic="true">0/200</span>
+          </div>
+          <button type="submit" class="add-btn" id="add-btn" aria-label="Add todo">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+            Add
+          </button>
+        </form>
+        <div class="error-banner" id="error-msg" role="alert" aria-live="assertive" hidden>
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="2"/><path d="M7 4v3M7 10h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span id="error-text"></span>
+        </div>
+        <ul class="todo-list" id="todo-list" role="list" aria-label="Todo items" aria-live="polite"></ul>
+        <div class="empty-state" id="empty-state" aria-live="polite">
+          <div class="empty-state-icon">☑️</div>
+          <p>No todos yet — add one above!</p>
+        </div>
+        <div class="todo-footer" id="todo-footer" hidden>
+          <span class="todo-counter" id="todo-counter" aria-live="polite" aria-atomic="true"></span>
+          <button class="clear-done-btn" id="clear-done-btn" hidden aria-label="Clear all completed todos">Clear completed</button>
+        </div>
+      </div>
+    </div>
+    <aside class="spec-sidebar" aria-label="Spec rule annotations">
+      <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-muted);margin-bottom:var(--s1)">Active Spec Rules</div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-ADD-01</div><p>Input text is trimmed before any validation or storage.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-ADD-02</div><p>Empty or whitespace-only input is rejected with an inline error.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-ADD-03</div><p>Input exceeding 200 characters is rejected.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-ADD-04</div><p>After a successful add, the input is cleared and refocused.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-ADD-05</div><p>New items always append to the end of the list.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-TOG-01</div><p>Toggle affects exactly and only the clicked item.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-DEL-01</div><p>Delete removes exactly and only the associated item.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-UI-01</div><p>Empty state visible if and only if zero items exist.</p></div>
+      <div class="spec-ann"><div class="spec-ann-id">CF-UI-02</div><p>Counter always reflects current completed / total counts.</p></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ── SPEC DOC ── -->
+<section id="tab-spec" class="tab-panel" role="tabpanel">
+  <div class="container">
+    <div class="sec-header">
+      <div class="sec-tag">CoreFlow Spec Kit</div>
+      <h2>Behavior Specification — Todo Application</h2>
+      <div style="display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3)">
+        <span class="badge b-blue">Version 1.0</span>
+        <span class="badge b-green">Status: Stable</span>
+        <span class="badge b-purple">Scope: Vanilla JS · DOM-as-state</span>
+      </div>
+    </div>
+    <div class="callout cl-blue">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <div class="callout-title">How to use this spec</div>
+        Every rule has a unique ID (e.g. <code>CF-ADD-01</code>). The reference implementation annotates each rule in comments. Use the IDs to link code, tests, and checklist items.
+      </div>
+    </div>
+    <hr class="divider" />
+    <h3>§1 Terminology</h3>
+    <table class="spec-table" style="margin-top:var(--s4)">
+      <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Todo item</strong></td><td>A text string representing a task, persisted as a DOM element with associated state.</td></tr>
+        <tr><td><strong>Pending</strong></td><td>A todo item whose <code>data-completed</code> attribute is <code>"false"</code>.</td></tr>
+        <tr><td><strong>Completed</strong></td><td>A todo item whose <code>data-completed</code> attribute is <code>"true"</code>.</td></tr>
+        <tr><td><strong>DOM-as-state</strong></td><td>The list DOM is the single source of truth; no separate JavaScript array mirrors it.</td></tr>
+        <tr><td><strong>Trim</strong></td><td>Removing leading and trailing whitespace via <code>String.prototype.trim()</code>.</td></tr>
+        <tr><td><strong>Invariant</strong></td><td>A condition that must hold at all times, regardless of user actions.</td></tr>
+      </tbody>
+    </table>
+    <hr class="divider" />
+    <h3>§2 Action Flows</h3>
+
+    <div class="spec-flow">
+      <div class="spec-flow-hd"><span class="flow-id">CF-ADD</span><span class="flow-title">Add Todo</span><span class="badge b-blue" style="margin-left:auto">5 rules</span></div>
+      <div class="spec-flow-bd">
+        <table class="spec-table" style="margin-bottom:var(--s5)"><thead><tr><th>Preconditions</th></tr></thead><tbody><tr><td>The input field is rendered and not disabled.</td></tr><tr><td>The user has focused the input field (via click or tab).</td></tr></tbody></table>
+        <strong style="font-size:.88rem;display:block;margin-bottom:var(--s3)">Trigger:</strong><p style="font-size:.9rem">User presses <kbd>Enter</kbd> or activates the "Add" button.</p>
+        <strong style="font-size:.88rem;display:block;margin-bottom:var(--s3)">Normal flow:</strong>
+        <div class="flow-step"><div class="flow-step-n">1</div><div class="flow-step-t"><strong>CF-ADD-01</strong> — The system trims the raw input value (removes leading/trailing whitespace).</div></div>
+        <div class="flow-step"><div class="flow-step-n">2</div><div class="flow-step-t"><strong>CF-ADD-02</strong> — If the trimmed text is empty (length === 0), an inline error is shown: "Todo text cannot be empty." The form is not submitted.</div></div>
+        <div class="flow-step"><div class="flow-step-n">3</div><div class="flow-step-t"><strong>CF-ADD-03</strong> — If the trimmed text exceeds 200 characters, an inline error is shown: "Todo text cannot exceed 200 characters." The form is not submitted.</div></div>
+        <div class="flow-step"><div class="flow-step-n">4</div><div class="flow-step-t">The system creates a new todo item DOM element using the trimmed text. Initial state: Pending (<code>data-completed="false"</code>).</div></div>
+        <div class="flow-step"><div class="flow-step-n">5</div><div class="flow-step-t"><strong>CF-ADD-05</strong> — The system appends the new item to the end of the list (not prepend).</div></div>
+        <div class="flow-step"><div class="flow-step-n">6</div><div class="flow-step-t"><strong>CF-ADD-04</strong> — The system clears the input field and returns focus to it.</div></div>
+        <div class="flow-step"><div class="flow-step-n">7</div><div class="flow-step-t">Counter and empty-state visibility are updated (CF-UI-01, CF-UI-02).</div></div>
+        <table class="spec-table" style="margin-top:var(--s5)"><thead><tr><th>Postconditions</th></tr></thead><tbody><tr><td>New list item with trimmed text is visible at the bottom of the list.</td></tr><tr><td>Input field is empty and focused.</td></tr><tr><td>No error message is displayed.</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <div class="spec-flow">
+      <div class="spec-flow-hd"><span class="flow-id">CF-TOG</span><span class="flow-title">Toggle Completion</span><span class="badge b-green" style="margin-left:auto">3 rules</span></div>
+      <div class="spec-flow-bd">
+        <table class="spec-table" style="margin-bottom:var(--s5)"><thead><tr><th>Preconditions</th></tr></thead><tbody><tr><td>At least one todo item exists in the list.</td></tr></tbody></table>
+        <strong style="font-size:.88rem;display:block;margin-bottom:var(--s3)">Trigger:</strong><p style="font-size:.9rem">User clicks the checkbox or the todo text label of a specific item.</p>
+        <strong style="font-size:.88rem;display:block;margin-bottom:var(--s3)">Normal flow:</strong>
+        <div class="flow-step"><div class="flow-step-n">1</div><div class="flow-step-t"><strong>CF-TOG-01</strong> — The system toggles the completion state of exactly and only the target item. No other items are affected.</div></div>
+        <div class="flow-step"><div class="flow-step-n">2</div><div class="flow-step-t"><strong>CF-TOG-02</strong> — The visual state updates synchronously: completed items show a checked circle and struck-through text.</div></div>
+        <div class="flow-step"><div class="flow-step-n">3</div><div class="flow-step-t"><strong>CF-TOG-03</strong> — The action is fully reversible: toggling a completed item returns it to pending, and vice versa.</div></div>
+        <table class="spec-table" style="margin-top:var(--s5)"><thead><tr><th>Postconditions</th></tr></thead><tbody><tr><td>Target item's <code>data-completed</code> is the opposite of its prior value.</td></tr><tr><td>All other items retain their prior states unchanged.</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <div class="spec-flow">
+      <div class="spec-flow-hd"><span class="flow-id">CF-DEL</span><span class="flow-title">Delete Todo</span><span class="badge b-red" style="margin-left:auto">2 rules</span></div>
+      <div class="spec-flow-bd">
+        <strong style="font-size:.88rem;display:block;margin-bottom:var(--s3)">Trigger:</strong><p style="font-size:.9rem">User activates the "×" delete button on a specific item.</p>
+        <div class="flow-step"><div class="flow-step-n">1</div><div class="flow-step-t"><strong>CF-DEL-01</strong> — The system removes from the DOM exactly and only the item associated with the activated delete button.</div></div>
+        <div class="flow-step"><div class="flow-step-n">2</div><div class="flow-step-t"><strong>CF-DEL-02</strong> — No other items are affected. Items above and below retain their positions and states.</div></div>
+        <div class="flow-step"><div class="flow-step-n">3</div><div class="flow-step-t">Counter and empty-state are updated (CF-UI-01, CF-UI-02).</div></div>
+      </div>
+    </div>
+
+    <div class="spec-flow">
+      <div class="spec-flow-hd"><span class="flow-id">CF-UI</span><span class="flow-title">UI State Management</span><span class="badge b-purple" style="margin-left:auto">3 rules</span></div>
+      <div class="spec-flow-bd">
+        <div class="flow-step"><div class="flow-step-n">1</div><div class="flow-step-t"><strong>CF-UI-01 (Empty State)</strong> — The empty-state element MUST be visible if and only if the list contains zero items.</div></div>
+        <div class="flow-step"><div class="flow-step-n">2</div><div class="flow-step-t"><strong>CF-UI-02 (Counter)</strong> — The footer counter MUST display "<em>N</em> of <em>M</em> completed". When all items are completed, the counter uses a success visual treatment.</div></div>
+        <div class="flow-step"><div class="flow-step-n">3</div><div class="flow-step-t"><strong>CF-UI-03 (Accessibility)</strong> — All interactive controls MUST be operable via keyboard. All inputs and controls MUST have programmatic labels. Live regions MUST announce list changes.</div></div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <h3>§3 System Invariants</h3>
+    <p style="font-size:.9rem;margin-top:var(--s3)">These conditions must hold at all times:</p>
+    <ul class="inv-list">
+      <li>The <code>data-completed</code> attribute of every item is exactly <code>"true"</code> or <code>"false"</code> — no other values.</li>
+      <li>The visible text of each item exactly matches its trimmed creation input — no extra whitespace.</li>
+      <li>The total item count displayed in the counter equals the number of <code>.todo-item</code> elements in the DOM.</li>
+      <li>No item is both visually struck-through and has <code>data-completed="false"</code> (visual and data states are always in sync).</li>
+      <li>The empty state is visible if and only if zero <code>.todo-item</code> elements exist.</li>
+      <li>The input field is never pre-populated with a previously submitted value after a successful add.</li>
+    </ul>
+    <hr class="divider" />
+    <h3>§4 Non-Goals (Explicitly Out of Scope)</h3>
+    <table class="spec-table" style="margin-top:var(--s4)">
+      <thead><tr><th>Feature</th><th>Reason excluded from v1</th></tr></thead>
+      <tbody>
+        <tr><td>Persistence (localStorage / server)</td><td>DOM-as-state exercise. Persistence is a separate concern.</td></tr>
+        <tr><td>Filtering (All / Active / Completed)</td><td>Kept minimal to focus on core CRUD and state management.</td></tr>
+        <tr><td>Drag-to-reorder</td><td>Requires event handling beyond the module's scope.</td></tr>
+        <tr><td>Inline editing of existing items</td><td>Deferred to an advanced extension exercise.</td></tr>
+        <tr><td>Duplicate detection</td><td>Policy decision deferred; both allow and warn are reasonable.</td></tr>
+        <tr><td>Animations / transitions</td><td>Visual polish is secondary to behavioral correctness.</td></tr>
+        <tr><td>Framework-specific patterns</td><td>Vanilla JS fundamentals only in v1.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── INSTRUCTOR GUIDE ── -->
+<section id="tab-guide" class="tab-panel" role="tabpanel">
+  <div class="container">
+    <div class="sec-header">
+      <div class="sec-tag">CoreFlow Spec Kit</div>
+      <h2>Instructor Guide</h2>
+      <div style="display:flex;gap:var(--s2);margin-top:var(--s3);flex-wrap:wrap">
+        <span class="badge b-blue">90-min lab session</span>
+        <span class="badge b-purple">Vanilla JS</span>
+        <span class="badge b-green">Beginner–Intermediate</span>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s4)">🎯 Learning Objectives</h3>
+      <p style="font-size:.9rem;color:var(--ink-muted);margin-bottom:var(--s4)">After completing this module, students will be able to:</p>
+      <ol style="padding-left:var(--s5)">
+        <li style="padding:var(--s2) 0;font-size:.9rem">Read and interpret a formal UI behavior specification, translating spec rules into testable acceptance criteria.</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">Implement DOM manipulation using vanilla JavaScript — creating, reading, updating, and deleting elements without a framework.</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">Apply the DOM-as-state pattern: use the DOM as the single source of truth rather than maintaining a parallel JavaScript data structure.</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">Handle edge cases explicitly — empty input, whitespace-only input, boundary conditions — as specified in a written spec.</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">Write accessible interactive UI using ARIA attributes, keyboard navigation, and live regions.</li>
+      </ol>
+    </div>
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s4)">📋 Prerequisites</h3>
+      <div class="two-col">
+        <div>
+          <strong style="font-size:.85rem">Required</strong>
+          <ul style="padding-left:var(--s4);margin-top:var(--s2)">
+            <li style="font-size:.88rem;padding:3px 0">HTML structure and semantic elements</li>
+            <li style="font-size:.88rem;padding:3px 0">JavaScript variables, functions, conditionals</li>
+            <li style="font-size:.88rem;padding:3px 0">Basic DOM querying (<code>querySelector</code>)</li>
+            <li style="font-size:.88rem;padding:3px 0">Event listeners (<code>addEventListener</code>)</li>
+          </ul>
+        </div>
+        <div>
+          <strong style="font-size:.85rem">Helpful but not required</strong>
+          <ul style="padding-left:var(--s4);margin-top:var(--s2)">
+            <li style="font-size:.88rem;padding:3px 0">CSS specificity and custom properties</li>
+            <li style="font-size:.88rem;padding:3px 0">HTML forms and validation</li>
+            <li style="font-size:.88rem;padding:3px 0">ARIA basics and accessibility</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s4)">⏱ 90-Minute Lesson Plan</h3>
+      <div class="timeline">
+        <div class="tl-item"><div class="tl-time">0:00 – 0:10</div><div class="tl-title">Open with the problem (10 min)</div><div class="tl-body">Show two "todo apps" side-by-side — one that accepts blank todos, one that doesn't. Ask: "Which is correct?" Introduce the spec as the answer. Without a spec, "correct" is undefined.</div></div>
+        <div class="tl-item"><div class="tl-time">0:10 – 0:25</div><div class="tl-title">Walk through the Spec Doc (15 min)</div><div class="tl-body">Read §2 Action Flows together. Have students highlight preconditions vs. postconditions in two colors. Discuss: "What would happen if we skipped CF-ADD-01?" Emphasize that spec IDs make communication unambiguous.</div></div>
+        <div class="tl-item"><div class="tl-time">0:25 – 0:40</div><div class="tl-title">Live App exploration (15 min)</div><div class="tl-body">Open the Live App tab. Demo each action. Have students try to break it — submit empty, submit spaces, type 200+ chars. Reference the spec rule that prevents each bad state.</div></div>
+        <div class="tl-item"><div class="tl-time">0:40 – 0:70</div><div class="tl-title">Exercise A — Debug (30 min)</div><div class="tl-body">Students work individually or in pairs. They identify each bug, name the spec rule it violates, and write the fix. Circulate and coach. Avoid giving direct answers — ask "What does CF-ADD-02 say should happen?"</div></div>
+        <div class="tl-item"><div class="tl-time">0:70 – 0:80</div><div class="tl-title">Debrief Exercise A (10 min)</div><div class="tl-body">Review each bug as a class. Highlight the "Toggle All" bug (Bug 3) — a classic misuse of <code>querySelectorAll</code> vs. targeting the specific element.</div></div>
+        <div class="tl-item" style="padding-bottom:0"><div class="tl-time">0:80 – 0:90</div><div class="tl-title">Introduce Exercise B + wrap-up (10 min)</div><div class="tl-body">Introduce "Clear Completed". Walk through writing a mini-spec before coding. Assign as homework. Close by asking: "What's one thing you'd add to the spec?"</div></div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s4)">💬 Discussion Questions</h3>
+      <ol style="padding-left:var(--s5)">
+        <li style="padding:var(--s2) 0;font-size:.9rem">The spec says new items are appended (CF-ADD-05). What trade-offs would "prepend" vs. "append" create for a shared grocery list vs. a work task tracker?</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">CF-ADD-01 requires trimming whitespace. Are there scenarios where you would <em>not</em> want to trim? (Hint: consider a code snippet manager.)</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">The spec is silent on duplicate todos. Write a one-sentence rule for your preferred behavior and a one-sentence rule for the opposite. Which creates more user surprise?</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">DOM-as-state means the DOM holds all data. What are the risks if a user edits the DOM via Dev Tools? How would you mitigate this in a production app?</li>
+        <li style="padding:var(--s2) 0;font-size:.9rem">The spec requires keyboard accessibility (CF-UI-03). How would a blind user test CF-TOG-01 — that toggle only affects the target item?</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:var(--s4)">⚠️ Common Student Mistakes</h3>
+      <table class="spec-table">
+        <thead><tr><th>Mistake</th><th>Spec violation</th><th>Coaching hint</th></tr></thead>
+        <tbody>
+          <tr><td>Using <code>.value.length === 0</code> without trimming</td><td>CF-ADD-01/02</td><td>"What does the user see if they press spacebar 5 times and hit Enter?"</td></tr>
+          <tr><td>Forgetting to clear the input after add</td><td>CF-ADD-04</td><td>"Read the postconditions for CF-ADD. What state must the input be in?"</td></tr>
+          <tr><td>Using <code>querySelectorAll</code> to toggle instead of the specific item</td><td>CF-TOG-01</td><td>"How many elements does <code>querySelectorAll</code> return? Is that what the spec says?"</td></tr>
+          <tr><td>Deleting <code>list.firstChild</code> instead of the clicked item</td><td>CF-DEL-01/02</td><td>"What does the user expect when they click delete on the third item?"</td></tr>
+          <tr><td>Not updating counter/empty state after mutations</td><td>CF-UI-01/02</td><td>"Is the counter displaying the current state? How does the spec define its invariant?"</td></tr>
+          <tr><td>Using <code>innerHTML</code> with unsanitized user input</td><td>Security (XSS)</td><td>"What happens if the user types <code>&lt;script&gt;alert(1)&lt;/script&gt;</code>?"</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ── EXERCISE A: DEBUG ── -->
+<section id="tab-exercise-a" class="tab-panel" role="tabpanel">
+  <div class="ex-hd">
+    <div class="ex-hd-inner">
+      <div class="ex-tag">Exercise A · Debugging</div>
+      <h2>Find and Fix the Spec Violations</h2>
+      <p>The following JavaScript implementation contains four deliberate bugs — each violates a specific spec rule. Identify each bug, name the rule it violates, and write the fix.</p>
+    </div>
+  </div>
+  <div class="container">
+    <div class="callout cl-amber"><div class="callout-icon">🎯</div><div class="callout-body"><div class="callout-title">Before you read the code</div>Open the Spec Doc tab. Read §2 Action Flows carefully. Write down the spec ID for each bug <em>before</em> writing the fix.</div></div>
+    <h3 style="margin-top:var(--s6);margin-bottom:var(--s3)">Buggy Implementation</h3>
+    <div class="code-block">
+      <div class="code-label">buggy_todo.js — find the 4 spec violations</div>
+<span class="c">// Buggy Todo Implementation — Exercise A</span>
+<span class="c">// DO NOT USE AS REFERENCE — contains intentional spec violations</span>
+
+<span class="k">const</span> MAX_LENGTH = <span class="n">200</span>;
+
+<span class="k">function</span> <span class="fn">handleSubmit</span>(e) {
+  e.<span class="fn">preventDefault</span>();
+  <span class="k">const</span> input = document.<span class="fn">getElementById</span>(<span class="s">'todo-input'</span>);
+<span class="bug-line">  <span class="k">const</span> text = input.value;    <span class="c">// BUG 1: missing .trim() — violates which rule?</span></span>
+
+  <span class="k">if</span> (text.length === <span class="n">0</span>) {
+    <span class="fn">showError</span>(<span class="s">'Cannot be empty.'</span>);
+    <span class="k">return</span>;
+  }
+  <span class="k">if</span> (text.length > MAX_LENGTH) {
+    <span class="fn">showError</span>(<span class="s">`Cannot exceed ${MAX_LENGTH} chars.`</span>);
+    <span class="k">return</span>;
+  }
+
+  <span class="fn">addItem</span>(text);
+<span class="bug-line">  <span class="c">// BUG 2: what should happen here after a successful add?</span></span>
+  <span class="fn">updateUI</span>();
+}
+
+<span class="k">function</span> <span class="fn">toggleItem</span>(item) {
+<span class="bug-line">  <span class="k">const</span> all = document.<span class="fn">querySelectorAll</span>(<span class="s">'.todo-item'</span>); <span class="c">// BUG 3: wrong target</span></span>
+  all.<span class="fn">forEach</span>(i => {
+    <span class="k">const</span> done = i.dataset.completed === <span class="s">'true'</span>;
+    i.dataset.completed = <span class="fn">String</span>(!done);
+    i.<span class="fn">querySelector</span>(<span class="s">'.todo-text'</span>).classList.<span class="fn">toggle</span>(<span class="s">'done'</span>, !done);
+    i.<span class="fn">querySelector</span>(<span class="s">'.todo-checkbox'</span>).checked = !done;
+  });
+}
+
+<span class="k">function</span> <span class="fn">deleteItem</span>(item) {
+  <span class="k">const</span> list = document.<span class="fn">getElementById</span>(<span class="s">'todo-list'</span>);
+<span class="bug-line">  list.firstElementChild.<span class="fn">remove</span>(); <span class="c">// BUG 4: always removes first item</span></span>
+}
+    </div>
+    <hr class="divider" />
+    <h3 style="margin-bottom:var(--s4)">Bug Discovery Worksheet</h3>
+    <table class="spec-table">
+      <thead><tr><th>#</th><th>Observed behavior</th><th>Expected behavior (per spec)</th><th>Spec rule(s) violated</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Bug 1</strong></td><td>Input "   " (spaces only) is accepted and added to the list.</td><td>Whitespace-only input must be rejected with an error.</td><td><code>CF-ADD-01</code>, <code>CF-ADD-02</code></td><td>Change <code>input.value</code> to <code>input.value.trim()</code></td></tr>
+        <tr><td><strong>Bug 2</strong></td><td>After adding, the input field still contains the entered text.</td><td>Input must be cleared and refocused after a successful add.</td><td><code>CF-ADD-04</code></td><td>Add <code>input.value = ''; input.focus();</code> after <code>addItem(text);</code></td></tr>
+        <tr><td><strong>Bug 3</strong></td><td>Clicking any item's toggle marks <em>all</em> items completed/pending simultaneously.</td><td>Only the clicked item's state must change.</td><td><code>CF-TOG-01</code></td><td>Replace <code>querySelectorAll('.todo-item')</code> with just the <code>item</code> parameter</td></tr>
+        <tr><td><strong>Bug 4</strong></td><td>Clicking delete on any item always removes the <em>first</em> item in the list.</td><td>The item associated with the delete button must be removed.</td><td><code>CF-DEL-01</code>, <code>CF-DEL-02</code></td><td>Replace <code>list.firstElementChild.remove()</code> with <code>item.remove()</code></td></tr>
+      </tbody>
+    </table>
+    <hr class="divider" />
+    <h3 style="margin-bottom:var(--s3)">Corrected Code</h3>
+    <div class="spoiler" id="spoiler-a">
+      <button class="spoiler-toggle" onclick="toggleSpoiler('spoiler-a')"><span class="arrow">▶</span> Reveal fixes (attempt the worksheet first!)</button>
+      <div class="spoiler-body">
+        <div class="code-block" style="margin:0">
+          <div class="code-label">fixed_todo.js — all 4 bugs corrected</div>
+<span class="k">function</span> <span class="fn">handleSubmit</span>(e) {
+  e.<span class="fn">preventDefault</span>();
+  <span class="k">const</span> input = document.<span class="fn">getElementById</span>(<span class="s">'todo-input'</span>);
+  <span class="c">// FIX 1 + 2 (CF-ADD-01/02): trim before validation</span>
+  <span class="k">const</span> text = input.value.<span class="fn">trim</span>();
+
+  <span class="k">if</span> (text.length === <span class="n">0</span>) { <span class="fn">showError</span>(<span class="s">'Cannot be empty.'</span>); <span class="k">return</span>; }
+  <span class="k">if</span> (text.length > MAX_LENGTH) { <span class="fn">showError</span>(<span class="s">`Cannot exceed ${MAX_LENGTH} chars.`</span>); <span class="k">return</span>; }
+
+  <span class="fn">addItem</span>(text);
+  <span class="c">// FIX 2 (CF-ADD-04): clear and refocus input</span>
+  input.value = <span class="s">''</span>;
+  input.<span class="fn">focus</span>();
+  <span class="fn">updateUI</span>();
+}
+
+<span class="k">function</span> <span class="fn">toggleItem</span>(item) {
+  <span class="c">// FIX 3 (CF-TOG-01): operate on the specific item only</span>
+  <span class="k">const</span> done = item.dataset.completed === <span class="s">'true'</span>;
+  item.dataset.completed = <span class="fn">String</span>(!done);
+  item.<span class="fn">querySelector</span>(<span class="s">'.todo-text'</span>).classList.<span class="fn">toggle</span>(<span class="s">'done'</span>, !done);
+  item.<span class="fn">querySelector</span>(<span class="s">'.todo-checkbox'</span>).checked = !done;
+}
+
+<span class="k">function</span> <span class="fn">deleteItem</span>(item) {
+  <span class="c">// FIX 4 (CF-DEL-01): remove the specific item, not firstElementChild</span>
+  item.<span class="fn">remove</span>();
+}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── EXERCISE B: EXTEND ── -->
+<section id="tab-exercise-b" class="tab-panel" role="tabpanel">
+  <div class="ex-hd">
+    <div class="ex-hd-inner">
+      <div class="ex-tag">Exercise B · Feature Extension</div>
+      <h2>Add "Clear Completed"</h2>
+      <p>Extend the todo app with a scoped new feature. Write a mini-spec first, then implement it. The feature must not break any existing spec rules.</p>
+    </div>
+  </div>
+  <div class="container">
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s3)">📋 Feature Request</h3>
+      <div class="callout cl-blue" style="margin-bottom:var(--s4)"><div class="callout-icon">💬</div><div class="callout-body"><div class="callout-title">User story</div>"As a user with multiple completed tasks, I want to remove all completed items at once so that I can declutter my list without deleting each one individually."</div></div>
+      <p style="font-size:.9rem"><strong>Feature name:</strong> Clear Completed</p>
+      <p style="font-size:.9rem"><strong>Trigger:</strong> A "Clear completed" button in the todo app footer.</p>
+      <p style="font-size:.9rem;margin:0"><strong>Constraint:</strong> The button must not appear when there are zero completed items. It must not affect pending items.</p>
+    </div>
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s3)">Step 1 — Write the Mini-Spec First</h3>
+      <p style="font-size:.9rem;color:var(--ink-muted);margin-bottom:var(--s4)">Before touching the code, write a spec entry using the same format as §2. Include:</p>
+      <ul style="padding-left:var(--s5);margin-bottom:var(--s4)">
+        <li style="font-size:.9rem;padding:3px 0">A unique spec ID (suggest: <code>CF-CLR</code>)</li>
+        <li style="font-size:.9rem;padding:3px 0">Preconditions (when should the button be visible?)</li>
+        <li style="font-size:.9rem;padding:3px 0">Trigger and normal flow (numbered steps)</li>
+        <li style="font-size:.9rem;padding:3px 0">Postconditions and one invariant</li>
+      </ul>
+      <div class="callout cl-amber"><div class="callout-icon">📝</div><div class="callout-body">Write your spec on paper or a separate document. Do not start coding until it has been reviewed by your partner or instructor.</div></div>
+    </div>
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s4)">Step 2 — Acceptance Criteria</h3>
+      <table class="spec-table">
+        <thead><tr><th>#</th><th>Criterion</th><th>How to verify</th></tr></thead>
+        <tbody>
+          <tr><td>AC-1</td><td>"Clear completed" button is <em>not visible</em> when no items are completed.</td><td>Add 2 todos, don't check any. Button should be hidden.</td></tr>
+          <tr><td>AC-2</td><td>Button <em>appears</em> when at least one item is completed.</td><td>Check one item. Button should become visible.</td></tr>
+          <tr><td>AC-3</td><td>Clicking removes <em>all</em> completed items.</td><td>Complete 3 of 5 items, click button. 2 pending items remain.</td></tr>
+          <tr><td>AC-4</td><td>Pending items are not affected.</td><td>After clear, all remaining items have <code>data-completed="false"</code>.</td></tr>
+          <tr><td>AC-5</td><td>Counter (CF-UI-02) updates correctly after clear.</td><td>Counter should show "0 of 2 completed" after AC-3 scenario.</td></tr>
+          <tr><td>AC-6</td><td>Empty state (CF-UI-01) shows if all items were completed and cleared.</td><td>Complete all items, click clear. Empty state should appear.</td></tr>
+          <tr><td>AC-7</td><td>Button is keyboard-accessible.</td><td>Tab to the button and press Enter. Same result as mouse click.</td></tr>
+          <tr><td>AC-8</td><td>No existing spec rules are broken.</td><td>Run through all existing behaviors after adding the feature.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-bottom:var(--s6)">
+      <h3 style="margin-bottom:var(--s3)">Step 3 — Implementation Hints</h3>
+      <div class="spoiler" id="hint-1"><button class="spoiler-toggle" onclick="toggleSpoiler('hint-1')"><span class="arrow">▶</span> Hint 1 — Where to add the button</button><div class="spoiler-body"><p style="font-size:.9rem">Add the button to the todo footer. Give it <code>id="clear-done-btn"</code> and start with the <code>hidden</code> attribute. In your <code>updateUI()</code> function, toggle <code>hidden</code> based on whether any <code>[data-completed="true"]</code> items exist.</p></div></div>
+      <div class="spoiler" id="hint-2" style="margin-top:var(--s3)"><button class="spoiler-toggle" onclick="toggleSpoiler('hint-2')"><span class="arrow">▶</span> Hint 2 — Selecting and removing completed items</button><div class="spoiler-body"><div class="code-block" style="margin:0"><span class="k">const</span> completed = document.<span class="fn">querySelectorAll</span>(<span class="s">'.todo-item[data-completed="true"]'</span>);
+completed.<span class="fn">forEach</span>(item => item.<span class="fn">remove</span>());
+<span class="fn">updateUI</span>();</div></div></div>
+      <div class="spoiler" id="hint-3" style="margin-top:var(--s3)"><button class="spoiler-toggle" onclick="toggleSpoiler('hint-3')"><span class="arrow">▶</span> Hint 3 — Toggling button visibility in updateUI</button><div class="spoiler-body"><div class="code-block" style="margin:0"><span class="k">const</span> clearBtn = document.<span class="fn">getElementById</span>(<span class="s">'clear-done-btn'</span>);
+<span class="c">// Show button only when there are completed items</span>
+clearBtn.hidden = completed.length === <span class="n">0</span>;</div></div></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:var(--s3)">🚀 Bonus Challenges</h3>
+      <ol style="padding-left:var(--s5)">
+        <li style="font-size:.9rem;padding:var(--s2) 0"><strong>Undo delete:</strong> After deleting an item, show a "Undo" toast for 5 seconds. Clicking Undo restores the item to its previous position and state.</li>
+        <li style="font-size:.9rem;padding:var(--s2) 0"><strong>Item count badge:</strong> Display pending count in the browser tab title (e.g. <code>(3) My Todos</code>). Spec the format and when the number is omitted.</li>
+        <li style="font-size:.9rem;padding:var(--s2) 0"><strong>Keyboard shortcut:</strong> <kbd>Ctrl+Z</kbd> / <kbd>Cmd+Z</kbd> undoes the last add or delete. Spec behavior for multiple consecutive undos.</li>
+        <li style="font-size:.9rem;padding:var(--s2) 0"><strong>Filter row:</strong> Add "All", "Active", "Completed" filters. Spec the interaction between filters and the empty state message.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ── REVIEW CHECKLIST ── -->
+<section id="tab-checklist" class="tab-panel" role="tabpanel">
+  <div class="cl-hd">
+    <h2>Student Submission Review Checklist</h2>
+    <p>Use this when reviewing student implementations of the CoreFlow Todo spec. Each item maps to a specific spec rule.</p>
+  </div>
+  <div class="container">
+    <div class="cl-controls">
+      <button onclick="checkAll()">Check all</button>
+      <button onclick="uncheckAll()">Clear all</button>
+      <button onclick="window.print()">🖨 Print</button>
+      <div class="cl-score" id="cl-score">0 / 28 checked</div>
+    </div>
+
+    <div class="cl-section">
+      <div class="cl-section-title">📋 Spec Compliance — Add (CF-ADD)</div>
+      <div class="cl-item" id="cli-1"><input type="checkbox" id="c1" onchange="updateScore()"><label for="c1">Input is trimmed before validation and storage.<span class="cl-detail">CF-ADD-01 · Verify: submit "  hello  " → stored as "hello"</span></label></div>
+      <div class="cl-item" id="cli-2"><input type="checkbox" id="c2" onchange="updateScore()"><label for="c2">Empty input (length 0) is rejected with an error message.<span class="cl-detail">CF-ADD-02 · Verify: submit "" → error shown, no item added</span></label></div>
+      <div class="cl-item" id="cli-3"><input type="checkbox" id="c3" onchange="updateScore()"><label for="c3">Whitespace-only input is rejected with an error message.<span class="cl-detail">CF-ADD-01 + CF-ADD-02 · Verify: submit "   " → error shown, no item added</span></label></div>
+      <div class="cl-item" id="cli-4"><input type="checkbox" id="c4" onchange="updateScore()"><label for="c4">Input exceeding 200 characters is rejected.<span class="cl-detail">CF-ADD-03 · Verify: paste 201-char string → error shown</span></label></div>
+      <div class="cl-item" id="cli-5"><input type="checkbox" id="c5" onchange="updateScore()"><label for="c5">After a successful add, the input field is empty.<span class="cl-detail">CF-ADD-04 · Verify: add "Buy milk" → input shows ""</span></label></div>
+      <div class="cl-item" id="cli-6"><input type="checkbox" id="c6" onchange="updateScore()"><label for="c6">After a successful add, focus returns to the input field.<span class="cl-detail">CF-ADD-04 · Verify: cursor/caret is in the input after submit</span></label></div>
+      <div class="cl-item" id="cli-7"><input type="checkbox" id="c7" onchange="updateScore()"><label for="c7">New items appear at the end of the list (append, not prepend).<span class="cl-detail">CF-ADD-05 · Verify: add A, B, C → order is A, B, C top-to-bottom</span></label></div>
+    </div>
+
+    <div class="cl-section">
+      <div class="cl-section-title">🔄 Spec Compliance — Toggle (CF-TOG)</div>
+      <div class="cl-item" id="cli-8"><input type="checkbox" id="c8" onchange="updateScore()"><label for="c8">Toggling an item only affects that item, not others.<span class="cl-detail">CF-TOG-01 · Verify: with 3 items, toggle item 2 → only item 2 changes</span></label></div>
+      <div class="cl-item" id="cli-9"><input type="checkbox" id="c9" onchange="updateScore()"><label for="c9">Completed items display strikethrough text and a checked circle.<span class="cl-detail">CF-TOG-02 · Visual check: completed item is visually distinct</span></label></div>
+      <div class="cl-item" id="cli-10"><input type="checkbox" id="c10" onchange="updateScore()"><label for="c10">Toggle is reversible: completed → pending → completed works.<span class="cl-detail">CF-TOG-03 · Verify: click checkbox twice → returns to original state</span></label></div>
+      <div class="cl-item" id="cli-11"><input type="checkbox" id="c11" onchange="updateScore()"><label for="c11"><code>data-completed</code> attribute matches visual state at all times.<span class="cl-detail">Invariant · Check in DevTools: inspect <code>data-completed</code> after toggle</span></label></div>
+    </div>
+
+    <div class="cl-section">
+      <div class="cl-section-title">🗑 Spec Compliance — Delete (CF-DEL)</div>
+      <div class="cl-item" id="cli-12"><input type="checkbox" id="c12" onchange="updateScore()"><label for="c12">Deleting an item removes exactly that item and no others.<span class="cl-detail">CF-DEL-01 · Verify: with 3 items, delete item 2 → items 1 and 3 remain</span></label></div>
+      <div class="cl-item" id="cli-13"><input type="checkbox" id="c13" onchange="updateScore()"><label for="c13">Remaining items' order and state are unchanged after a delete.<span class="cl-detail">CF-DEL-02 · Verify positions and completion states of surviving items</span></label></div>
+      <div class="cl-item" id="cli-14"><input type="checkbox" id="c14" onchange="updateScore()"><label for="c14">Deleting the last item triggers the empty state.<span class="cl-detail">CF-UI-01 + CF-DEL-01 · Verify: delete final item → empty state appears</span></label></div>
+    </div>
+
+    <div class="cl-section">
+      <div class="cl-section-title">📊 UI State (CF-UI)</div>
+      <div class="cl-item" id="cli-15"><input type="checkbox" id="c15" onchange="updateScore()"><label for="c15">Empty state is visible when and only when the list is empty.<span class="cl-detail">CF-UI-01 · Verify: 0 items → visible; 1+ items → hidden</span></label></div>
+      <div class="cl-item" id="cli-16"><input type="checkbox" id="c16" onchange="updateScore()"><label for="c16">Counter shows "N of M completed" with correct numbers.<span class="cl-detail">CF-UI-02 · Verify: 3 items, 1 completed → "1 of 3 completed"</span></label></div>
+      <div class="cl-item" id="cli-17"><input type="checkbox" id="c17" onchange="updateScore()"><label for="c17">Counter updates correctly after every add, toggle, and delete.<span class="cl-detail">CF-UI-02 · Run through all three actions, verify counter each time</span></label></div>
+    </div>
+
+    <div class="cl-section">
+      <div class="cl-section-title">⚡ Edge Cases</div>
+      <div class="cl-item" id="cli-18"><input type="checkbox" id="c18" onchange="updateScore()"><label for="c18">Submitting with Enter key works identically to clicking Add.<span class="cl-detail">Edge case · Verify: type text, press Enter → item added, input cleared</span></label></div>
+      <div class="cl-item" id="cli-19"><input type="checkbox" id="c19" onchange="updateScore()"><label for="c19">Single-character todos are accepted.<span class="cl-detail">Edge case · Verify: submit "X" → item added</span></label></div>
+      <div class="cl-item" id="cli-20"><input type="checkbox" id="c20" onchange="updateScore()"><label for="c20">Exactly 200-character input is accepted.<span class="cl-detail">Edge case · Verify: paste exactly 200 chars → item added</span></label></div>
+      <div class="cl-item" id="cli-21"><input type="checkbox" id="c21" onchange="updateScore()"><label for="c21">Todos with special characters (&lt;, &gt;, &amp;, quotes) display correctly (no XSS).<span class="cl-detail">Security · Verify: submit <code>&lt;b&gt;bold&lt;/b&gt;</code> → shown as literal text</span></label></div>
+      <div class="cl-item" id="cli-22"><input type="checkbox" id="c22" onchange="updateScore()"><label for="c22">Error message disappears when the user starts typing again.<span class="cl-detail">UX · Verify: submit empty → error shown; type one char → error gone</span></label></div>
+    </div>
+
+    <div class="cl-section">
+      <div class="cl-section-title">🧹 Code Quality</div>
+      <div class="cl-item" id="cli-23"><input type="checkbox" id="c23" onchange="updateScore()"><label for="c23">No separate JavaScript array mirrors the DOM (DOM-as-state respected).<span class="cl-detail">Architecture · Inspect JS: no <code>let todos = []</code> or equivalent state array</span></label></div>
+      <div class="cl-item" id="cli-24"><input type="checkbox" id="c24" onchange="updateScore()"><label for="c24">Event delegation is used for list interactions (not per-item listeners).<span class="cl-detail">Performance · Inspect JS: single listener on the list, not on each item</span></label></div>
+      <div class="cl-item" id="cli-25"><input type="checkbox" id="c25" onchange="updateScore()"><label for="c25">User input is escaped before insertion into the DOM.<span class="cl-detail">Security · Inspect JS: uses <code>createTextNode</code> or <code>textContent</code>, not raw <code>innerHTML</code></span></label></div>
+      <div class="cl-item" id="cli-26"><input type="checkbox" id="c26" onchange="updateScore()"><label for="c26">Functions are small and have a single responsibility.<span class="cl-detail">Quality · No function longer than ~20 lines; add, toggle, delete, updateUI are separate</span></label></div>
+    </div>
+
+    <div class="cl-section">
+      <div class="cl-section-title">♿ Accessibility (CF-UI-03)</div>
+      <div class="cl-item" id="cli-27"><input type="checkbox" id="c27" onchange="updateScore()"><label for="c27">All interactive controls are reachable and operable via keyboard.<span class="cl-detail">CF-UI-03 · Tab through the app: input, add button, checkboxes, delete buttons</span></label></div>
+      <div class="cl-item" id="cli-28"><input type="checkbox" id="c28" onchange="updateScore()"><label for="c28">Delete buttons have accessible names (e.g., "Delete: Buy milk" not just "×").<span class="cl-detail">CF-UI-03 · Inspect: <code>aria-label</code> on delete button includes the item text</span></label></div>
+    </div>
+  </div>
+</section>
+
+<script>
+// TAB NAVIGATION
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const on = btn.dataset.tab === name;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'tab-' + name);
+  });
+}
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+// SPOILER
+function toggleSpoiler(id) { document.getElementById(id).classList.toggle('open'); }
+
+// TODO APP — DOM-as-state, spec-compliant
+const TodoApp = (function () {
+  const MAX_LEN = 200;
+  let form, input, list, emptyState, errorMsg, errorText, counter, footer, clearDoneBtn, charCount;
+
+  function init() {
+    form         = document.getElementById('todo-form');
+    input        = document.getElementById('todo-input');
+    list         = document.getElementById('todo-list');
+    emptyState   = document.getElementById('empty-state');
+    errorMsg     = document.getElementById('error-msg');
+    errorText    = document.getElementById('error-text');
+    counter      = document.getElementById('todo-counter');
+    footer       = document.getElementById('todo-footer');
+    clearDoneBtn = document.getElementById('clear-done-btn');
+    charCount    = document.getElementById('char-count');
+
+    form.addEventListener('submit', handleSubmit);
+    list.addEventListener('click', handleListClick);
+    input.addEventListener('input', handleInput);
+    clearDoneBtn.addEventListener('click', handleClearDone);
+
+    updateUI();
+    input.focus();
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    const text = input.value.trim(); // CF-ADD-01
+    if (text.length === 0) { showError('Todo text cannot be empty or whitespace only.'); return; } // CF-ADD-02
+    if (text.length > MAX_LEN) { showError('Todo text cannot exceed 200 characters.'); return; }  // CF-ADD-03
+
+    list.appendChild(createItem(text)); // CF-ADD-05: append
+    input.value = '';                   // CF-ADD-04: clear
+    charCount.textContent = '0/' + MAX_LEN;
+    charCount.className = 'char-count';
+    clearError();
+    input.focus();                      // CF-ADD-04: refocus
+    updateUI();
+  }
+
+  function handleInput() {
+    const len = input.value.length;
+    charCount.textContent = len + '/' + MAX_LEN;
+    charCount.className = 'char-count' + (len >= MAX_LEN ? ' over' : len >= MAX_LEN * 0.8 ? ' warn' : '');
+    clearError();
+  }
+
+  function handleListClick(e) {
+    const delBtn = e.target.closest('.del-btn');
+    if (delBtn) { // CF-DEL-01: remove exactly the associated item
+      const item = delBtn.closest('.todo-item');
+      if (item) { item.remove(); updateUI(); }
+      return;
+    }
+    const toggleArea = e.target.closest('.todo-toggle-area');
+    if (toggleArea) { // CF-TOG-01: toggle exactly the clicked item
+      const item = toggleArea.closest('.todo-item');
+      if (item) { toggleItem(item); updateUI(); }
+      return;
+    }
+    const textEl = e.target.closest('.todo-text');
+    if (textEl) {
+      const item = textEl.closest('.todo-item');
+      if (item) { toggleItem(item); updateUI(); }
+    }
+  }
+
+  function toggleItem(item) { // CF-TOG-01/02/03
+    const wasDone = item.dataset.completed === 'true';
+    const nowDone = !wasDone;
+    item.dataset.completed = String(nowDone);
+    item.querySelector('.todo-checkbox').checked = nowDone;
+    item.querySelector('.todo-text').classList.toggle('done', nowDone);
+  }
+
+  function handleClearDone() {
+    list.querySelectorAll('.todo-item[data-completed="true"]').forEach(i => i.remove());
+    updateUI();
+  }
+
+  function createItem(text) {
+    const uid = 'td-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+    const li = document.createElement('li');
+    li.className = 'todo-item';
+    li.dataset.completed = 'false';
+    li.setAttribute('role', 'listitem');
+
+    const label = document.createElement('label');
+    label.className = 'todo-toggle-area';
+    label.htmlFor = uid;
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.className = 'todo-checkbox'; cb.id = uid;
+    cb.setAttribute('aria-label', 'Mark complete');
+
+    const mark = document.createElement('span');
+    mark.className = 'checkmark';
+    mark.setAttribute('aria-hidden', 'true');
+
+    label.appendChild(cb); label.appendChild(mark);
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'todo-text';
+    textSpan.appendChild(document.createTextNode(text)); // XSS-safe
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button'; delBtn.className = 'del-btn';
+    delBtn.setAttribute('aria-label', 'Delete: ' + text);
+    delBtn.title = 'Delete';
+    delBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 1L13 13M13 1L1 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
+    li.appendChild(label); li.appendChild(textSpan); li.appendChild(delBtn);
+    return li;
+  }
+
+  function updateUI() { // CF-UI-01, CF-UI-02
+    const items     = list.querySelectorAll('.todo-item');
+    const done      = list.querySelectorAll('.todo-item[data-completed="true"]');
+    const total     = items.length;
+    const doneCount = done.length;
+
+    emptyState.hidden    = total > 0;  // CF-UI-01
+    footer.hidden        = total === 0;
+    clearDoneBtn.hidden  = doneCount === 0;
+
+    if (total > 0) { // CF-UI-02
+      counter.textContent = doneCount + ' of ' + total + ' completed';
+      counter.className   = 'todo-counter' + (doneCount === total ? ' all-done' : '');
+    }
+  }
+
+  function showError(msg) {
+    errorText.textContent = msg; errorMsg.hidden = false;
+    input.classList.add('is-error'); input.setAttribute('aria-invalid', 'true');
+  }
+  function clearError() {
+    errorMsg.hidden = true;
+    input.classList.remove('is-error'); input.removeAttribute('aria-invalid');
+  }
+
+  return { init };
+}());
+
+// CHECKLIST
+function updateScore() {
+  const total   = document.querySelectorAll('#tab-checklist input[type="checkbox"]').length;
+  const checked = document.querySelectorAll('#tab-checklist input[type="checkbox"]:checked').length;
+  document.getElementById('cl-score').textContent = checked + ' / ' + total + ' checked';
+  document.querySelectorAll('.cl-item').forEach(item => {
+    const cb = item.querySelector('input[type="checkbox"]');
+    item.classList.toggle('is-checked', cb && cb.checked);
+  });
+}
+function checkAll()   { document.querySelectorAll('#tab-checklist input[type="checkbox"]').forEach(cb => { cb.checked = true;  }); updateScore(); }
+function uncheckAll() { document.querySelectorAll('#tab-checklist input[type="checkbox"]').forEach(cb => { cb.checked = false; }); updateScore(); }
+
+// BOOT
+document.addEventListener('DOMContentLoaded', function () { TodoApp.init(); updateScore(); });
+</script>
+</body>
+</html>

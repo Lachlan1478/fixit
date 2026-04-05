@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<!--
+  Focus25 Signal — Test Suite
+  Self-contained test runner; no external framework required.
+  Open in a browser to see results inline.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Focus25 Signal — Tests</title>
+
+  <style>
+    :root {
+      --bg:           #0d1117;
+      --surface:      #161b22;
+      --border:       #30363d;
+      --text:         #e6edf3;
+      --text-muted:   #8b949e;
+      --pass:         #3fb950;
+      --fail:         #f85149;
+      --warn:         #d29922;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                   'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 32px 24px;
+      line-height: 1.6;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    h2 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin: 28px 0 10px;
+      border-top: 1px solid var(--border);
+      padding-top: 20px;
+    }
+
+    /* ---- Summary banner ---- */
+    #summary {
+      display: inline-block;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+
+    #summary.all-pass { border-color: var(--pass); color: var(--pass); }
+    #summary.has-fail { border-color: var(--fail); color: var(--fail); }
+
+    /* ---- Test list ---- */
+    .test-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .test-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 14px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+
+    .test-item.pass { border-color: #1e3a24; }
+    .test-item.fail { border-color: #3a1a1a; background: #1a0d0d; }
+
+    .icon {
+      font-size: 15px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .test-name {
+      flex: 1;
+    }
+
+    .error-detail {
+      font-size: 12px;
+      color: var(--fail);
+      margin-top: 4px;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Focus25 Signal — Test Suite</h1>
+  <div id="summary">Running…</div>
+
+  <div id="test-output"></div>
+
+  <script>
+  (() => {
+    'use strict';
+
+    /* ==============================================================
+       MINIMAL TEST RUNNER
+       ============================================================== */
+    const results = [];
+
+    function test(name, fn) {
+      try {
+        fn();
+        results.push({ name, pass: true });
+      } catch (err) {
+        results.push({ name, pass: false, error: err.message || String(err) });
+      }
+    }
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message || 'Assertion failed');
+    }
+
+    function assertEqual(actual, expected, label) {
+      if (actual !== expected) {
+        throw new Error(
+          `${label || 'assertEqual'}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
+        );
+      }
+    }
+
+    function assertApprox(actual, expected, tolerance, label) {
+      if (Math.abs(actual - expected) > tolerance) {
+        throw new Error(
+          `${label || 'assertApprox'}: expected ~${expected} (±${tolerance}), got ${actual}`
+        );
+      }
+    }
+
+    /* ==============================================================
+       IMPLEMENTATIONS UNDER TEST
+       These are copied/re-implemented inline so the test suite is
+       self-contained and does not depend on the main app being loaded.
+       ============================================================== */
+
+    // ---- Constants ----
+    const WORK_MS       = 25 * 60 * 1000;
+    const BREAK_MS      =  5 * 60 * 1000;
+    const CIRCUMFERENCE = 2 * Math.PI * 126; // ≈ 791.68
+
+    // ---- formatTime ----
+    function formatTime(ms) {
+      const totalSeconds = Math.ceil(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    // ---- Ring offset ----
+    function computeRingOffset(remainingMs, totalMs) {
+      if (totalMs === 0) return CIRCUMFERENCE;
+      const elapsed  = totalMs - remainingMs;
+      const progress = elapsed / totalMs;
+      return CIRCUMFERENCE * progress;
+    }
+
+    // ---- Browser detection ----
+    function detectBrowser(ua) {
+      if (/Edg\//.test(ua))     return 'Edge';
+      if (/Chrome\//.test(ua))  return 'Chrome';
+      if (/Firefox\//.test(ua)) return 'Firefox';
+      if (/Safari\//.test(ua))  return 'Safari';
+      return 'Unknown';
+    }
+
+    // ---- Minimal state machine ----
+    /**
+     * Creates a fresh state object matching the app's initial shape.
+     * @returns {object}
+     */
+    function createState(overrides = {}) {
+      return {
+        phase:               'idle',
+        mode:                'work',
+        endTime:             null,
+        remainingMs:         WORK_MS,
+        totalMs:             WORK_MS,
+        completedPomodoros:  0,
+        completedBreaks:     0,
+        audioTested:         false,
+        notificationsEnabled: false,
+        alertFired:          false,
+        ...overrides,
+      };
+    }
+
+    /**
+     * Immutable state transition: start period.
+     * @param {object} s  current state
+     * @param {number} now  Date.now() substitute
+     * @returns {object}  new state
+     */
+    function startPeriod(s, now) {
+      return {
+        ...s,
+        phase:      'running',
+        endTime:    now + s.remainingMs,
+        alertFired: false,
+      };
+    }
+
+    /**
+     * Immutable state transition: pause period.
+     * @param {object} s
+     * @param {number} now
+     * @returns {object}
+     */
+    function pausePeriod(s, now) {
+      const remaining = Math.max(0, s.endTime - now);
+      return {
+        ...s,
+        phase:       'paused',
+        remainingMs: remaining,
+        endTime:     null,
+      };
+    }
+
+    /**
+     * Immutable state transition: resume period.
+     * @param {object} s
+     * @param {number} now
+     * @returns {object}
+     */
+    function resumePeriod(s, now) {
+      return {
+        ...s,
+        phase:   'running',
+        endTime: now + s.remainingMs,
+      };
+    }
+
+    /**
+     * Immutable state transition: handle period end.
+     * Fires only once per period (alertFired guard).
+     * @param {object} s
+     * @returns {object}
+     */
+    function handlePeriodEnd(s) {
+      if (s.alertFired) return s; // guard: prevent double-fire
+      const updates = {
+        phase:       'ended',
+        remainingMs: 0,
+        alertFired:  true,
+      };
+      if (s.mode === 'work') {
+        updates.completedPomodoros = s.completedPomodoros + 1;
+      } else {
+        updates.completedBreaks = s.completedBreaks + 1;
+      }
+      return { ...s, ...updates };
+    }
+
+    // ---- Analytics helpers (in-memory, no localStorage) ----
+    function createAnalyticsStore() {
+      return { events: [], totals: { totalPomodoros: 0, totalSessions: 0 } };
+    }
+
+    /**
+     * Record an event, capping store at 100 events.
+     * Returns a new store (immutable pattern).
+     */
+    function recordEvent(store, eventName, session, browser, os, extra = {}) {
+      const ev = {
+        ts:      Date.now(),
+        session,
+        event:   eventName,
+        browser,
+        os,
+        ...extra,
+      };
+      const events = [...store.events, ev];
+      const trimmed = events.length > 100 ? events.slice(events.length - 100) : events;
+      return { ...store, events: trimmed };
+    }
+
+    /* ==============================================================
+       TEST SUITE
+       ============================================================== */
+
+    // ----------------------------------------------------------
+    // 1. formatTime
+    // ----------------------------------------------------------
+    const SECTION_FORMAT_TIME = 'formatTime(ms)';
+
+    test(`${SECTION_FORMAT_TIME} — 25:00 from full work duration`, () => {
+      assertEqual(formatTime(WORK_MS), '25:00', 'formatTime(WORK_MS)');
+    });
+
+    test(`${SECTION_FORMAT_TIME} — 00:00 from 0 ms`, () => {
+      assertEqual(formatTime(0), '00:00', 'formatTime(0)');
+    });
+
+    test(`${SECTION_FORMAT_TIME} — 00:01 from 1000 ms`, () => {
+      assertEqual(formatTime(1000), '00:01', 'formatTime(1000)');
+    });
+
+    test(`${SECTION_FORMAT_TIME} — 01:30 from 90000 ms`, () => {
+      assertEqual(formatTime(90000), '01:30', 'formatTime(90000)');
+    });
+
+    test(`${SECTION_FORMAT_TIME} — 01:01 from 61000 ms`, () => {
+      assertEqual(formatTime(61000), '01:01', 'formatTime(61000)');
+    });
+
+    // Edge case: sub-second remainder rounds UP to next second
+    test(`${SECTION_FORMAT_TIME} — 00:01 from 500 ms (rounds up)`, () => {
+      assertEqual(formatTime(500), '00:01', 'formatTime(500)');
+    });
+
+    test(`${SECTION_FORMAT_TIME} — 00:01 from 1 ms (rounds up)`, () => {
+      assertEqual(formatTime(1), '00:01', 'formatTime(1)');
+    });
+
+    // ----------------------------------------------------------
+    // 2. Timer state transitions
+    // ----------------------------------------------------------
+    const SECTION_STATE = 'Timer state transitions';
+
+    test(`${SECTION_STATE} — idle → running: phase becomes running`, () => {
+      const now = Date.now();
+      const s0  = createState();
+      const s1  = startPeriod(s0, now);
+      assertEqual(s1.phase, 'running', 'phase after start');
+    });
+
+    test(`${SECTION_STATE} — idle → running: endTime is set correctly`, () => {
+      const now = 1_000_000;
+      const s0  = createState();
+      const s1  = startPeriod(s0, now);
+      assertEqual(s1.endTime, now + WORK_MS, 'endTime after start');
+    });
+
+    test(`${SECTION_STATE} — idle → running: alertFired is false`, () => {
+      const now = Date.now();
+      const s0  = createState({ alertFired: true }); // simulate leftover flag
+      const s1  = startPeriod(s0, now);
+      assertEqual(s1.alertFired, false, 'alertFired reset on start');
+    });
+
+    test(`${SECTION_STATE} — running → paused: phase becomes paused`, () => {
+      const startNow   = 1_000_000;
+      const pauseNow   = startNow + 5_000; // 5 s elapsed
+      const s0 = createState();
+      const s1 = startPeriod(s0, startNow);
+      const s2 = pausePeriod(s1, pauseNow);
+      assertEqual(s2.phase, 'paused', 'phase after pause');
+    });
+
+    test(`${SECTION_STATE} — running → paused: remainingMs is updated`, () => {
+      const startNow   = 1_000_000;
+      const pauseNow   = startNow + 5_000;
+      const s0 = createState();
+      const s1 = startPeriod(s0, startNow);
+      const s2 = pausePeriod(s1, pauseNow);
+      const expected   = WORK_MS - 5_000;
+      assertEqual(s2.remainingMs, expected, 'remainingMs after pause');
+    });
+
+    test(`${SECTION_STATE} — running → paused: endTime cleared`, () => {
+      const startNow = 1_000_000;
+      const s0 = createState();
+      const s1 = startPeriod(s0, startNow);
+      const s2 = pausePeriod(s1, startNow + 5_000);
+      assertEqual(s2.endTime, null, 'endTime null after pause');
+    });
+
+    test(`${SECTION_STATE} — paused → running: phase becomes running`, () => {
+      const startNow  = 1_000_000;
+      const pauseNow  = startNow + 5_000;
+      const resumeNow = pauseNow + 30_000;
+      const s0 = createState();
+      const s1 = startPeriod(s0, startNow);
+      const s2 = pausePeriod(s1, pauseNow);
+      const s3 = resumePeriod(s2, resumeNow);
+      assertEqual(s3.phase, 'running', 'phase after resume');
+    });
+
+    test(`${SECTION_STATE} — paused → running: endTime recalculated from resumeNow`, () => {
+      const startNow  = 1_000_000;
+      const pauseNow  = startNow + 5_000;
+      const resumeNow = pauseNow + 30_000;
+      const s0 = createState();
+      const s1 = startPeriod(s0, startNow);
+      const s2 = pausePeriod(s1, pauseNow);
+      const s3 = resumePeriod(s2, resumeNow);
+      const expectedEnd = resumeNow + s2.remainingMs;
+      assertEqual(s3.endTime, expectedEnd, 'endTime recalculated after resume');
+    });
+
+    test(`${SECTION_STATE} — period end: phase becomes ended`, () => {
+      const s0 = createState({ phase: 'running', endTime: Date.now() - 1 });
+      const s1 = handlePeriodEnd(s0);
+      assertEqual(s1.phase, 'ended', 'phase after period end');
+    });
+
+    test(`${SECTION_STATE} — period end: completedPomodoros incremented for work mode`, () => {
+      const s0 = createState({ mode: 'work', completedPomodoros: 0, phase: 'running' });
+      const s1 = handlePeriodEnd(s0);
+      assertEqual(s1.completedPomodoros, 1, 'completedPomodoros after work end');
+    });
+
+    test(`${SECTION_STATE} — period end: completedBreaks incremented for break mode`, () => {
+      const s0 = createState({ mode: 'break', completedBreaks: 0, phase: 'running' });
+      const s1 = handlePeriodEnd(s0);
+      assertEqual(s1.completedBreaks, 1, 'completedBreaks after break end');
+    });
+
+    test(`${SECTION_STATE} — period end: remainingMs set to 0`, () => {
+      const s0 = createState({ phase: 'running' });
+      const s1 = handlePeriodEnd(s0);
+      assertEqual(s1.remainingMs, 0, 'remainingMs after period end');
+    });
+
+    // ----------------------------------------------------------
+    // 3. Ring offset calculation
+    // ----------------------------------------------------------
+    const SECTION_RING = 'Ring offset calculation';
+
+    test(`${SECTION_RING} — offset = 0 at period start (full ring)`, () => {
+      const offset = computeRingOffset(WORK_MS, WORK_MS);
+      assertEqual(offset, 0, 'offset at start');
+    });
+
+    test(`${SECTION_RING} — offset = CIRCUMFERENCE / 2 at 50% elapsed`, () => {
+      const remaining = WORK_MS / 2;
+      const offset    = computeRingOffset(remaining, WORK_MS);
+      assertApprox(offset, CIRCUMFERENCE / 2, 0.01, 'offset at 50%');
+    });
+
+    test(`${SECTION_RING} — offset = CIRCUMFERENCE at period end (empty ring)`, () => {
+      const offset = computeRingOffset(0, WORK_MS);
+      assertApprox(offset, CIRCUMFERENCE, 0.01, 'offset at end');
+    });
+
+    test(`${SECTION_RING} — offset increases as time elapses (monotonic)`, () => {
+      const offsets = [1.0, 0.75, 0.5, 0.25, 0].map(
+        frac => computeRingOffset(WORK_MS * frac, WORK_MS)
+      );
+      for (let i = 1; i < offsets.length; i++) {
+        assert(offsets[i] >= offsets[i - 1],
+          `offset not monotonically increasing at index ${i}: ${offsets[i - 1]} → ${offsets[i]}`);
+      }
+    });
+
+    test(`${SECTION_RING} — CIRCUMFERENCE constant matches 2π×126`, () => {
+      assertApprox(CIRCUMFERENCE, 791.68, 0.1, 'CIRCUMFERENCE value');
+    });
+
+    // ----------------------------------------------------------
+    // 4. Background timing compensation
+    // ----------------------------------------------------------
+    const SECTION_BG = 'Background timing compensation';
+
+    test(`${SECTION_BG} — if endTime is in the past, handlePeriodEnd is called`, () => {
+      // Simulate: period started but tab was hidden; we check on visibility restore
+      const pastEndTime = Date.now() - 5_000;  // ended 5s ago
+      const s0 = createState({ phase: 'running', endTime: pastEndTime, remainingMs: 0 });
+
+      // The visibility handler logic: if Date.now() >= endTime, call handlePeriodEnd
+      const shouldFire = Date.now() >= s0.endTime;
+      assert(shouldFire, 'should detect past endTime on visibility restore');
+
+      const s1 = handlePeriodEnd(s0);
+      assertEqual(s1.phase, 'ended', 'phase ended after bg compensation');
+    });
+
+    test(`${SECTION_BG} — alertFired flag prevents double-firing`, () => {
+      const s0 = createState({ phase: 'running', alertFired: false });
+      const s1 = handlePeriodEnd(s0);  // first call
+      assertEqual(s1.alertFired, true, 'alertFired set after first call');
+
+      const s2 = handlePeriodEnd(s1);  // second call — should be no-op
+      // State should not change (completedPomodoros stays at 1, not incremented again)
+      assertEqual(s2.completedPomodoros, s1.completedPomodoros,
+        'double-alert prevention: counter not incremented again');
+    });
+
+    test(`${SECTION_BG} — alertFired is reset to false when a new period starts`, () => {
+      const s0 = createState({ alertFired: true });
+      const s1 = startPeriod(s0, Date.now());
+      assertEqual(s1.alertFired, false, 'alertFired reset on new period start');
+    });
+
+    // ----------------------------------------------------------
+    // 5. Analytics
+    // ----------------------------------------------------------
+    const SECTION_ANALYTICS = 'Analytics';
+
+    test(`${SECTION_ANALYTICS} — recorded event has correct shape`, () => {
+      let store = createAnalyticsStore();
+      store = recordEvent(store, 'session_open', 'abc123', 'Chrome', 'macOS');
+      const ev = store.events[0];
+
+      assert(typeof ev.ts      === 'number',  'ts is a number');
+      assert(typeof ev.session === 'string',  'session is a string');
+      assert(typeof ev.event   === 'string',  'event is a string');
+      assert(typeof ev.browser === 'string',  'browser is a string');
+      assert(typeof ev.os      === 'string',  'os is a string');
+    });
+
+    test(`${SECTION_ANALYTICS} — event field matches the name passed in`, () => {
+      let store = createAnalyticsStore();
+      store = recordEvent(store, 'period_start', 'abc123', 'Chrome', 'macOS', { mode: 'work' });
+      assertEqual(store.events[0].event, 'period_start', 'event name');
+      assertEqual(store.events[0].mode,  'work',         'extra field: mode');
+    });
+
+    test(`${SECTION_ANALYTICS} — store caps at 100 events`, () => {
+      let store = createAnalyticsStore();
+      // Add 110 events
+      for (let i = 0; i < 110; i++) {
+        store = recordEvent(store, 'period_start', 'sess', 'Chrome', 'macOS');
+      }
+      assertEqual(store.events.length, 100, 'events capped at 100');
+    });
+
+    test(`${SECTION_ANALYTICS} — oldest events are dropped when over 100`, () => {
+      let store = createAnalyticsStore();
+      // Add 100 events with mode='old'
+      for (let i = 0; i < 100; i++) {
+        store = recordEvent(store, 'period_start', 'sess', 'Chrome', 'macOS', { order: 'old' });
+      }
+      // Add 5 more with order='new'
+      for (let i = 0; i < 5; i++) {
+        store = recordEvent(store, 'period_start', 'sess', 'Chrome', 'macOS', { order: 'new' });
+      }
+      assertEqual(store.events.length, 100, 'still capped at 100');
+      // The last 5 should be the 'new' ones
+      const lastFive = store.events.slice(-5);
+      lastFive.forEach(ev => {
+        assertEqual(ev.order, 'new', 'newest events retained');
+      });
+      // The first event should be 'old' (index 5 of original 105)
+      assertEqual(store.events[0].order, 'old', 'first retained event is from old batch');
+    });
+
+    test(`${SECTION_ANALYTICS} — session is included in every event`, () => {
+      let store = createAnalyticsStore();
+      const sessionId = 'test-sess-42';
+      store = recordEvent(store, 'session_open',    sessionId, 'Firefox', 'Linux');
+      store = recordEvent(store, 'period_start',    sessionId, 'Firefox', 'Linux', { mode: 'work' });
+      store = recordEvent(store, 'pomodoro_complete', sessionId, 'Firefox', 'Linux');
+
+      store.events.forEach(ev => {
+        assertEqual(ev.session, sessionId, `session present in event: ${ev.event}`);
+      });
+    });
+
+    // ----------------------------------------------------------
+    // 6. Browser detection
+    // ----------------------------------------------------------
+    const SECTION_BROWSER = 'Browser detection';
+
+    test(`${SECTION_BROWSER} — Chrome UA detected as Chrome`, () => {
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                 '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+      assertEqual(detectBrowser(ua), 'Chrome', 'Chrome detection');
+    });
+
+    test(`${SECTION_BROWSER} — Firefox UA detected as Firefox`, () => {
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
+      assertEqual(detectBrowser(ua), 'Firefox', 'Firefox detection');
+    });
+
+    test(`${SECTION_BROWSER} — Safari UA detected as Safari`, () => {
+      const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 ' +
+                 '(KHTML, like Gecko) Version/17.4 Safari/605.1.15';
+      assertEqual(detectBrowser(ua), 'Safari', 'Safari detection');
+    });
+
+    test(`${SECTION_BROWSER} — Edge UA detected as Edge`, () => {
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                 '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0';
+      assertEqual(detectBrowser(ua), 'Edge', 'Edge detection');
+    });
+
+    test(`${SECTION_BROWSER} — Unknown UA detected as Unknown`, () => {
+      assertEqual(detectBrowser('Opera/9.80 (Windows NT 6.0) Presto/2.12'), 'Unknown', 'Unknown detection');
+    });
+
+    /* ==============================================================
+       RENDER RESULTS
+       ============================================================== */
+    const passed = results.filter(r => r.pass).length;
+    const total  = results.length;
+    const allOk  = passed === total;
+
+    const summaryEl = document.getElementById('summary');
+    summaryEl.textContent = `${passed} / ${total} tests passed`;
+    summaryEl.className   = allOk ? 'all-pass' : 'has-fail';
+
+    // Group by section
+    const sections = {};
+    results.forEach(r => {
+      const [section, ...rest] = r.name.split(' — ');
+      const short = rest.join(' — ');
+      if (!sections[section]) sections[section] = [];
+      sections[section].push({ ...r, shortName: short });
+    });
+
+    const output = document.getElementById('test-output');
+
+    Object.entries(sections).forEach(([sectionName, tests]) => {
+      const h2 = document.createElement('h2');
+      const sectionPassed = tests.filter(t => t.pass).length;
+      h2.textContent = `${sectionName}  (${sectionPassed}/${tests.length})`;
+      output.appendChild(h2);
+
+      const ul = document.createElement('ul');
+      ul.className = 'test-list';
+
+      tests.forEach(r => {
+        const li = document.createElement('li');
+        li.className = `test-item ${r.pass ? 'pass' : 'fail'}`;
+
+        const icon = document.createElement('span');
+        icon.className   = 'icon';
+        icon.textContent = r.pass ? '✓' : '✗';
+        icon.style.color = r.pass ? 'var(--pass)' : 'var(--fail)';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'test-name';
+
+        const nameLine = document.createElement('div');
+        nameLine.textContent = r.shortName;
+        nameEl.appendChild(nameLine);
+
+        if (!r.pass && r.error) {
+          const errEl = document.createElement('div');
+          errEl.className   = 'error-detail';
+          errEl.textContent = r.error;
+          nameEl.appendChild(errEl);
+        }
+
+        li.appendChild(icon);
+        li.appendChild(nameEl);
+        ul.appendChild(li);
+      });
+
+      output.appendChild(ul);
+    });
+
+  })();
+  </script>
+
+</body>
+</html>

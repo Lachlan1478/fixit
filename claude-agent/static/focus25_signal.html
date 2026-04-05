@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<!--
+  Focus25 Signal — Pomodoro timer built on absolute timestamps for reliable
+  background-safe timing. No audio files; all tones generated via Web Audio API.
+  Notifications via Web Notifications API. Fully self-contained single HTML file.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Focus25 Signal</title>
+
+  <style>
+    /* =========================================================
+       CSS CUSTOM PROPERTIES — THEME
+       ========================================================= */
+    :root {
+      --bg:           #0d1117;
+      --surface:      #161b22;
+      --border:       #30363d;
+      --text:         #e6edf3;
+      --text-muted:   #8b949e;
+
+      --work-accent:  #f85149;
+      --work-bg:      #160b0b;
+      --break-accent: #3fb950;
+      --break-bg:     #0b1610;
+      --idle-accent:  #4f9cf9;
+
+      --radius:       12px;
+      --transition:   0.8s ease;
+    }
+
+    /* =========================================================
+       RESET & BASE
+       ========================================================= */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                   'Helvetica Neue', Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px 80px; /* bottom padding for status bar */
+      transition: background-color var(--transition);
+    }
+
+    body.mode-work    { background-color: var(--work-bg); }
+    body.mode-break   { background-color: var(--break-bg); }
+
+    /* =========================================================
+       FLASH OVERLAY
+       ========================================================= */
+    #flash-overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      z-index: 9999;
+      transition: opacity 0.15s ease;
+    }
+
+    #flash-overlay.flash-work  { background: var(--work-accent); }
+    #flash-overlay.flash-break { background: var(--break-accent); }
+    #flash-overlay.active      { opacity: 0.25; }
+
+    /* =========================================================
+       MAIN LAYOUT
+       ========================================================= */
+    .app-container {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    /* App name */
+    .app-name {
+      font-size: 11px;
+      font-variant: small-caps;
+      letter-spacing: 0.25em;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    /* Mode label */
+    .mode-label {
+      font-size: 22px;
+      font-weight: 500;
+      min-height: 32px;
+      transition: color 0.4s ease;
+    }
+
+    .mode-label.color-work  { color: var(--work-accent); }
+    .mode-label.color-break { color: var(--break-accent); }
+    .mode-label.color-idle  { color: var(--text); }
+
+    /* =========================================================
+       TIMER RING
+       ========================================================= */
+    .ring-container {
+      position: relative;
+      width: 280px;
+      height: 280px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Pulse animation while phase === 'ended' */
+    .ring-container.ring-pulse {
+      animation: ringPulse 1.1s ease-in-out infinite;
+    }
+
+    @keyframes ringPulse {
+      0%, 100% { transform: scale(1); }
+      50%       { transform: scale(1.035); }
+    }
+
+    .ring-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg); /* start at 12 o'clock */
+    }
+
+    /* Background track */
+    .ring-track {
+      fill: none;
+      stroke: var(--border);
+      stroke-width: 6;
+    }
+
+    /* Progress arc */
+    .ring-progress {
+      fill: none;
+      stroke: var(--idle-accent);
+      stroke-width: 6;
+      stroke-linecap: round;
+      stroke-dasharray: 791.68;
+      stroke-dashoffset: 0;           /* full ring visible by default */
+      transition: stroke-dashoffset 0.25s linear, stroke 0.4s ease;
+    }
+
+    .ring-progress.color-work  { stroke: var(--work-accent); }
+    .ring-progress.color-break { stroke: var(--break-accent); }
+
+    /* Center content */
+    .ring-center {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .time-display {
+      font-size: 72px;
+      font-weight: 200;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      letter-spacing: -2px;
+      transition: color 0.4s ease;
+    }
+
+    .time-display.color-work  { color: var(--work-accent); }
+    .time-display.color-break { color: var(--break-accent); }
+    .time-display.color-idle  { color: var(--text); }
+
+    .time-status {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* =========================================================
+       BUTTONS
+       ========================================================= */
+    .button-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+    }
+
+    .btn-main {
+      width: 100%;
+      padding: 14px 0;
+      border-radius: var(--radius);
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: opacity 0.2s ease, transform 0.1s ease, background 0.3s ease,
+                  color 0.3s ease, border-color 0.3s ease;
+      letter-spacing: 0.03em;
+    }
+
+    .btn-main:active { transform: scale(0.98); }
+
+    /* Start Work — solid red */
+    .btn-main.style-start-work {
+      background: var(--work-accent);
+      color: #fff;
+    }
+
+    /* Start Break — solid green */
+    .btn-main.style-start-break {
+      background: var(--break-accent);
+      color: #fff;
+    }
+
+    /* Pause — muted transparent */
+    .btn-main.style-pause {
+      background: transparent;
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+
+    /* Resume — idle accent transparent */
+    .btn-main.style-resume {
+      background: transparent;
+      color: var(--idle-accent);
+      border-color: var(--idle-accent);
+    }
+
+    /* Reset link */
+    .btn-reset {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 13px;
+      cursor: pointer;
+      padding: 4px 8px;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      transition: color 0.2s ease;
+    }
+
+    .btn-reset:hover { color: var(--text); }
+    .btn-reset.hidden { visibility: hidden; }
+
+    /* =========================================================
+       SESSION STATS
+       ========================================================= */
+    .stats-row {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .stat-value {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .stats-divider {
+      width: 1px;
+      height: 24px;
+      background: var(--border);
+    }
+
+    /* =========================================================
+       RELIABILITY STATUS BAR
+       ========================================================= */
+    .reliability-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+      font-size: 12px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .reliability-bar:hover {
+      background: #1c2128;
+    }
+
+    .reliability-bar:focus {
+      outline: 2px solid var(--idle-accent);
+      outline-offset: -2px;
+    }
+
+    .status-dot-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .dot-green  { background: var(--break-accent); }
+    .dot-yellow { background: #d29922; }
+    .dot-red    { background: var(--work-accent); }
+
+    /* =========================================================
+       MODALS — shared
+       ========================================================= */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.72);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 1000;
+    }
+
+    .modal-backdrop.hidden { display: none; }
+
+    .modal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 24px 24px;
+      max-width: 440px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .modal-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .modal-title {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .modal-subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .modal-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .modal-section-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* Check row inside modal */
+    .check-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .check-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+    }
+
+    /* Small action button inside modal */
+    .btn-check {
+      padding: 7px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: border-color 0.2s ease, color 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .btn-check:hover       { border-color: var(--idle-accent); color: var(--idle-accent); }
+    .btn-check.confirmed   { border-color: var(--break-accent); color: var(--break-accent); }
+    .btn-check.denied      { border-color: var(--work-accent);  color: var(--work-accent); }
+
+    /* Browser tips panel */
+    .tips-panel {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .tips-panel strong {
+      color: var(--text);
+    }
+
+    .tips-panel ul {
+      padding-left: 18px;
+      margin-top: 6px;
+    }
+
+    .tips-panel li + li {
+      margin-top: 4px;
+    }
+
+    /* Primary dismiss / CTA button */
+    .btn-cta {
+      width: 100%;
+      padding: 13px 0;
+      border-radius: var(--radius);
+      border: none;
+      background: var(--idle-accent);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+      transition: opacity 0.2s ease;
+    }
+
+    .btn-cta:hover { opacity: 0.88; }
+
+    /* =========================================================
+       SCROLLBAR STYLING (WebKit)
+       ========================================================= */
+    ::-webkit-scrollbar              { width: 6px; }
+    ::-webkit-scrollbar-track        { background: transparent; }
+    ::-webkit-scrollbar-thumb        { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover  { background: var(--text-muted); }
+  </style>
+</head>
+
+<body>
+
+  <!-- ============================================================
+       FLASH OVERLAY (programmatic visual alert)
+       ============================================================ -->
+  <div id="flash-overlay" aria-hidden="true"></div>
+
+  <!-- ============================================================
+       FIRST-RUN RELIABILITY CHECK MODAL
+       ============================================================ -->
+  <div id="modal-first-run" class="modal-backdrop" role="dialog"
+       aria-modal="true" aria-labelledby="first-run-title">
+    <div class="modal-card">
+
+      <div class="modal-header">
+        <div class="modal-title" id="first-run-title">Welcome to Focus25 Signal</div>
+        <div class="modal-subtitle">
+          Built for reliability — timers fire on time even when your tab is hidden.
+          Let's make sure everything works before you start.
+        </div>
+      </div>
+
+      <!-- Audio check -->
+      <div class="modal-section">
+        <div class="modal-section-title">Audio Alerts</div>
+        <div class="check-row">
+          <div class="check-label">
+            <span id="audio-dot" class="status-dot dot-yellow"></span>
+            <span>Play a test tone to confirm audio works</span>
+          </div>
+          <button id="btn-test-audio" class="btn-check" onclick="testAudio()">Test</button>
+        </div>
+      </div>
+
+      <!-- Notification check -->
+      <div class="modal-section">
+        <div class="modal-section-title">System Notifications</div>
+        <div class="check-row">
+          <div class="check-label">
+            <span id="notif-dot" class="status-dot dot-yellow"></span>
+            <span>Enable notifications to be alerted when tab is hidden</span>
+          </div>
+          <button id="btn-notif" class="btn-check" onclick="requestNotifications()">Enable</button>
+        </div>
+      </div>
+
+      <!-- Browser-specific tips -->
+      <div class="modal-section">
+        <div class="modal-section-title">Browser Tips</div>
+        <div id="browser-tips" class="tips-panel"></div>
+      </div>
+
+      <!-- Dismiss -->
+      <button class="btn-cta" onclick="dismissFirstRun()">Let's Focus &rarr;</button>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       RELIABILITY DETAIL MODAL (opened from status bar)
+       ============================================================ -->
+  <div id="modal-reliability" class="modal-backdrop hidden" role="dialog"
+       aria-modal="true" aria-labelledby="reliability-title">
+    <div class="modal-card">
+
+      <div class="modal-header">
+        <div class="modal-title" id="reliability-title">Reliability Status</div>
+        <div class="modal-subtitle">
+          Check audio and notification readiness for background-safe alerting.
+        </div>
+      </div>
+
+      <!-- Audio check (duplicated controls) -->
+      <div class="modal-section">
+        <div class="modal-section-title">Audio Alerts</div>
+        <div class="check-row">
+          <div class="check-label">
+            <span id="audio-dot-2" class="status-dot dot-yellow"></span>
+            <span>Play a test tone</span>
+          </div>
+          <button id="btn-test-audio-2" class="btn-check" onclick="testAudio()">Test</button>
+        </div>
+      </div>
+
+      <!-- Notification check -->
+      <div class="modal-section">
+        <div class="modal-section-title">System Notifications</div>
+        <div class="check-row">
+          <div class="check-label">
+            <span id="notif-dot-2" class="status-dot dot-yellow"></span>
+            <span>Browser notification permission</span>
+          </div>
+          <button id="btn-notif-2" class="btn-check" onclick="requestNotifications()">Enable</button>
+        </div>
+      </div>
+
+      <!-- Browser tips (same content) -->
+      <div class="modal-section">
+        <div class="modal-section-title">Browser Tips</div>
+        <div id="browser-tips-2" class="tips-panel"></div>
+      </div>
+
+      <button class="btn-cta" onclick="closeReliabilityModal()">Done</button>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       MAIN APP
+       ============================================================ -->
+  <main class="app-container" role="main">
+
+    <div class="app-name">Focus25 Signal</div>
+
+    <!-- Mode label -->
+    <div id="mode-label" class="mode-label color-idle">Ready to Focus</div>
+
+    <!-- Progress ring + time display -->
+    <div id="ring-container" class="ring-container">
+      <svg class="ring-svg" viewBox="0 0 280 280" aria-hidden="true">
+        <!-- background track -->
+        <circle class="ring-track"
+                cx="140" cy="140" r="126" />
+        <!-- progress arc -->
+        <circle id="ring-progress" class="ring-progress"
+                cx="140" cy="140" r="126"
+                stroke-dasharray="791.68"
+                stroke-dashoffset="0" />
+      </svg>
+
+      <div class="ring-center">
+        <div id="time-display" class="time-display color-idle">25:00</div>
+        <div id="time-status" class="time-status">Start your work!</div>
+      </div>
+    </div>
+
+    <!-- Main action button + reset -->
+    <div class="button-group">
+      <button id="btn-main" class="btn-main style-start-work"
+              onclick="handleMainButton()">
+        Start Work
+      </button>
+      <button id="btn-reset" class="btn-reset hidden"
+              onclick="handleReset()" aria-label="Reset current period">
+        Reset
+      </button>
+    </div>
+
+    <!-- Session stats -->
+    <div class="stats-row" aria-live="polite" aria-atomic="true">
+      <div class="stat-item">
+        <span class="stat-value" id="stat-pomodoros">0</span>
+        <span>🍅 pomodoros</span>
+      </div>
+      <div class="stats-divider" role="separator"></div>
+      <div class="stat-item">
+        <span class="stat-value" id="stat-breaks">0</span>
+        <span>☕ breaks</span>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ============================================================
+       RELIABILITY STATUS BAR
+       ============================================================ -->
+  <div id="reliability-bar" class="reliability-bar"
+       role="button" tabindex="0" aria-label="Open reliability status"
+       onclick="showReliabilityModal()"
+       onkeydown="if(event.key==='Enter'||event.key===' ')showReliabilityModal()">
+    <span>Reliability</span>
+    <div class="status-dot-group">
+      <span id="bar-audio-dot" class="status-dot dot-yellow" title="Audio"></span>
+      <span>Audio</span>
+    </div>
+    <div class="status-dot-group">
+      <span id="bar-notif-dot" class="status-dot dot-yellow" title="Notifications"></span>
+      <span>Notifications</span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       APPLICATION SCRIPT
+       ============================================================ -->
+  <script>
+  (() => {
+    'use strict';
+
+    /* ============================================================
+       CONSTANTS
+       ============================================================ */
+    const WORK_MS        = 25 * 60 * 1000;
+    const BREAK_MS       =  5 * 60 * 1000;
+    const CIRCUMFERENCE  = 2 * Math.PI * 126; // ≈ 791.68
+    const TICK_INTERVAL  = 250;               // ms between UI refreshes
+
+    /* ============================================================
+       APPLICATION STATE
+       ============================================================ */
+    let state = {
+      phase:               'idle',   // 'idle' | 'running' | 'paused' | 'ended'
+      mode:                'work',   // 'work' | 'break'
+      endTime:             null,     // absolute Date.now() when period ends
+      remainingMs:         WORK_MS,
+      totalMs:             WORK_MS,
+      completedPomodoros:  0,
+      completedBreaks:     0,
+      audioTested:         false,
+      notificationsEnabled: false,
+      firstRunComplete:    false,
+      alertFired:          false,    // prevents double-alerts on tab restore
+    };
+
+    let tickTimer = null;  // setInterval handle
+
+    /* ============================================================
+       LOCAL STORAGE HELPERS
+       ============================================================ */
+    function lsGet(key) {
+      try { return localStorage.getItem(key); } catch { return null; }
+    }
+
+    function lsSet(key, value) {
+      try { localStorage.setItem(key, value); } catch { /* private mode */ }
+    }
+
+    /* ============================================================
+       ANALYTICS (localStorage only, anonymous)
+       ============================================================ */
+    const SESSION_ID = Math.random().toString(36).slice(2, 10);
+
+    function detectBrowser() {
+      const ua = navigator.userAgent;
+      if (/Edg\//.test(ua))    return 'Edge';
+      if (/Chrome\//.test(ua)) return 'Chrome';
+      if (/Firefox\//.test(ua)) return 'Firefox';
+      if (/Safari\//.test(ua)) return 'Safari';
+      return 'Unknown';
+    }
+
+    function detectOS() {
+      const p = (navigator.platform || '').toLowerCase();
+      const ua = navigator.userAgent;
+      if (/iphone|ipad|ipod/.test(ua.toLowerCase())) return 'iOS';
+      if (/mac/.test(p))     return 'macOS';
+      if (/win/.test(p))     return 'Windows';
+      if (/linux/.test(p))   return 'Linux';
+      if (/android/.test(ua.toLowerCase())) return 'Android';
+      return 'Unknown';
+    }
+
+    function loadAnalytics() {
+      try {
+        const raw = lsGet('focus25_analytics');
+        if (raw) return JSON.parse(raw);
+      } catch { /* ignore */ }
+      return { events: [], totals: { totalPomodoros: 0, totalSessions: 0 } };
+    }
+
+    function saveAnalytics(data) {
+      try { lsSet('focus25_analytics', JSON.stringify(data)); } catch { /* ignore */ }
+    }
+
+    function recordEvent(eventName, extra = {}) {
+      const data = loadAnalytics();
+      const ev = {
+        ts:      Date.now(),
+        session: SESSION_ID,
+        event:   eventName,
+        browser: detectBrowser(),
+        os:      detectOS(),
+        ...extra,
+      };
+      data.events.push(ev);
+      // Keep only the last 100 events
+      if (data.events.length > 100) {
+        data.events = data.events.slice(data.events.length - 100);
+      }
+      saveAnalytics(data);
+    }
+
+    function recordTotalIncrement(key) {
+      const data = loadAnalytics();
+      data.totals[key] = (data.totals[key] || 0) + 1;
+      saveAnalytics(data);
+    }
+
+    /* ============================================================
+       AUDIO — Web Audio API, programmatic tone generation
+       ============================================================ */
+    let audioCtx = null;
+
+    function getAudioCtx() {
+      if (!audioCtx) {
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+          return null;
+        }
+      }
+      return audioCtx;
+    }
+
+    /**
+     * Play a sequence of tones.
+     * @param {Array<{freq: number, start: number, dur: number}>} notes
+     */
+    function playTones(notes) {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+
+      // Resume context if suspended (autoplay policy)
+      if (ctx.state === 'suspended') ctx.resume();
+
+      notes.forEach(({ freq, start, dur }) => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.type      = 'sine';
+        osc.frequency.value = freq;
+
+        const t0 = ctx.currentTime + start;
+        const t1 = t0 + dur;
+
+        gain.gain.setValueAtTime(0, t0);
+        gain.gain.linearRampToValueAtTime(0.35, t0 + 0.02);
+        gain.gain.setValueAtTime(0.35, t1 - 0.05);
+        gain.gain.linearRampToValueAtTime(0, t1);
+
+        osc.start(t0);
+        osc.stop(t1 + 0.01);
+      });
+    }
+
+    // Work complete: 3 ascending tones C5→E5→G5
+    function playWorkComplete() {
+      playTones([
+        { freq: 523.25, start: 0.00, dur: 0.25 }, // C5
+        { freq: 659.25, start: 0.28, dur: 0.25 }, // E5
+        { freq: 783.99, start: 0.56, dur: 0.40 }, // G5
+      ]);
+    }
+
+    // Break complete: 2 descending tones E5→C5
+    function playBreakComplete() {
+      playTones([
+        { freq: 659.25, start: 0.00, dur: 0.30 }, // E5
+        { freq: 523.25, start: 0.35, dur: 0.45 }, // C5
+      ]);
+    }
+
+    // Test tone: quick 3-note sweep
+    function playTestTone() {
+      playTones([
+        { freq: 440.00, start: 0.00, dur: 0.18 }, // A4
+        { freq: 554.37, start: 0.20, dur: 0.18 }, // C#5
+        { freq: 659.25, start: 0.40, dur: 0.25 }, // E5
+      ]);
+    }
+
+    /* ============================================================
+       NOTIFICATIONS — Web Notifications API
+       ============================================================ */
+    function sendNotification(title, body) {
+      if (!('Notification' in window)) return;
+      if (Notification.permission !== 'granted') return;
+      try {
+        new Notification(title, { body, icon: '' });
+      } catch (e) { /* service worker required on some platforms */ }
+    }
+
+    /* ============================================================
+       VISUAL FLASH ALERT
+       ============================================================ */
+    function triggerFlash(type) {
+      const el = document.getElementById('flash-overlay');
+      el.className = type === 'work' ? 'flash-work active' : 'flash-break active';
+      setTimeout(() => { el.classList.remove('active'); }, 600);
+    }
+
+    /* ============================================================
+       FORMAT TIME
+       ============================================================ */
+    function formatTime(ms) {
+      const totalSeconds = Math.ceil(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    /* ============================================================
+       RING OFFSET
+       ============================================================ */
+    function computeRingOffset(remainingMs, totalMs) {
+      if (totalMs === 0) return CIRCUMFERENCE;
+      const elapsed  = totalMs - remainingMs;
+      const progress = elapsed / totalMs;            // 0 = start, 1 = end
+      return CIRCUMFERENCE * progress;               // 0 = full ring, CIRC = empty
+    }
+
+    /* ============================================================
+       UI RENDER — derives everything from state
+       ============================================================ */
+    function render() {
+      const { phase, mode, remainingMs, totalMs,
+              completedPomodoros, completedBreaks } = state;
+
+      /* ---- Body background ---- */
+      document.body.className =
+        (phase === 'running' || phase === 'paused' || phase === 'ended')
+          ? `mode-${mode}`
+          : '';
+
+      /* ---- Mode label ---- */
+      const labelEl = document.getElementById('mode-label');
+      let labelText  = '';
+      let labelColor = 'color-idle';
+
+      if (phase === 'idle') {
+        labelText  = mode === 'work' ? 'Ready to Focus' : 'Ready for a Break';
+        labelColor = 'color-idle';
+      } else if (phase === 'running') {
+        labelText  = mode === 'work' ? '● Work Session' : '● Break';
+        labelColor = `color-${mode}`;
+      } else if (phase === 'paused') {
+        labelText  = mode === 'work' ? 'Work — Paused' : 'Break — Paused';
+        labelColor = 'color-idle';
+      } else if (phase === 'ended') {
+        labelText  = mode === 'work'
+          ? 'Work Complete! 🎯'
+          : 'Break Complete! ☀️';
+        labelColor = `color-${mode}`;
+      }
+
+      labelEl.textContent = labelText;
+      labelEl.className   = `mode-label ${labelColor}`;
+
+      /* ---- Time display ---- */
+      const timeEl   = document.getElementById('time-display');
+      const statusEl = document.getElementById('time-status');
+
+      timeEl.textContent = formatTime(remainingMs);
+
+      let timeColor  = 'color-idle';
+      let statusText = '';
+
+      if (phase === 'running') {
+        timeColor  = `color-${mode}`;
+        statusText = mode === 'work' ? '🍅 focus' : '☕ break';
+      } else if (phase === 'paused') {
+        statusText = '⏸ paused';
+      } else if (phase === 'ended') {
+        timeColor  = `color-${mode}`;
+        statusText = mode === 'work' ? 'Start your break!' : 'Start your work!';
+      } else {
+        // idle
+        statusText = mode === 'work' ? 'Start your work!' : 'Start your break!';
+      }
+
+      timeEl.className   = `time-display ${timeColor}`;
+      statusEl.textContent = statusText;
+
+      /* ---- Ring progress ---- */
+      const ringEl = document.getElementById('ring-progress');
+      const offset = computeRingOffset(remainingMs, totalMs);
+      ringEl.style.strokeDashoffset = offset;
+      ringEl.className =
+        (phase === 'running' || phase === 'ended')
+          ? `ring-progress color-${mode}`
+          : 'ring-progress';
+
+      /* ---- Ring pulse (phase ended) ---- */
+      const containerEl = document.getElementById('ring-container');
+      containerEl.classList.toggle('ring-pulse', phase === 'ended');
+
+      /* ---- Main button ---- */
+      const mainBtn = document.getElementById('btn-main');
+      let btnText  = '';
+      let btnStyle = '';
+
+      if (phase === 'idle' || phase === 'ended') {
+        if (mode === 'work') {
+          btnText  = phase === 'ended' ? 'Start Break' : 'Start Work';
+          btnStyle = phase === 'ended' ? 'style-start-break' : 'style-start-work';
+        } else {
+          btnText  = phase === 'ended' ? 'Start Work' : 'Start Break';
+          btnStyle = phase === 'ended' ? 'style-start-work' : 'style-start-break';
+        }
+      } else if (phase === 'running') {
+        btnText  = 'Pause';
+        btnStyle = 'style-pause';
+      } else if (phase === 'paused') {
+        btnText  = 'Resume';
+        btnStyle = 'style-resume';
+      }
+
+      mainBtn.textContent = btnText;
+      mainBtn.className   = `btn-main ${btnStyle}`;
+
+      /* ---- Reset button ---- */
+      const resetBtn = document.getElementById('btn-reset');
+      const hasStarted = phase !== 'idle' ||
+        (mode === 'work'  && remainingMs < WORK_MS) ||
+        (mode === 'break' && remainingMs < BREAK_MS);
+      resetBtn.classList.toggle('hidden', !hasStarted && phase === 'idle');
+
+      /* ---- Stats ---- */
+      document.getElementById('stat-pomodoros').textContent = completedPomodoros;
+      document.getElementById('stat-breaks').textContent    = completedBreaks;
+    }
+
+    /* ============================================================
+       PERIOD TIMING LOGIC
+       ============================================================ */
+    function startPeriod() {
+      state = {
+        ...state,
+        phase:      'running',
+        endTime:    Date.now() + state.remainingMs,
+        alertFired: false,
+      };
+
+      recordEvent('period_start', { mode: state.mode });
+      startTick();
+      render();
+    }
+
+    function pausePeriod() {
+      const remaining = Math.max(0, state.endTime - Date.now());
+      state = {
+        ...state,
+        phase:       'paused',
+        remainingMs: remaining,
+        endTime:     null,
+      };
+      stopTick();
+      render();
+    }
+
+    function resumePeriod() {
+      state = {
+        ...state,
+        phase:   'running',
+        endTime: Date.now() + state.remainingMs,
+      };
+      startTick();
+      render();
+    }
+
+    function handlePeriodEnd() {
+      if (state.alertFired) return; // prevent double-alert
+      state = {
+        ...state,
+        phase:       'ended',
+        remainingMs: 0,
+        alertFired:  true,
+      };
+      stopTick();
+
+      // Fire all three alert channels
+      if (state.mode === 'work') {
+        playWorkComplete();
+        triggerFlash('work');
+        sendNotification('🎯 Work session complete!', 'Time for a 5-minute break.');
+        // Analytics
+        state = { ...state, completedPomodoros: state.completedPomodoros + 1 };
+        recordEvent('pomodoro_complete', { totalPomodoros: state.completedPomodoros });
+        recordTotalIncrement('totalPomodoros');
+      } else {
+        playBreakComplete();
+        triggerFlash('break');
+        sendNotification('☀️ Break time over!', 'Ready to focus?');
+        state = { ...state, completedBreaks: state.completedBreaks + 1 };
+        recordEvent('break_complete', { totalBreaks: state.completedBreaks });
+        recordTotalIncrement('totalBreaks');
+      }
+
+      render();
+    }
+
+    /* ============================================================
+       TICK — UI refresh every 250ms
+       ============================================================ */
+    function tick() {
+      if (state.phase !== 'running') return;
+
+      const remaining = state.endTime - Date.now();
+
+      if (remaining <= 0) {
+        // Period has ended (or tab was hidden and we missed it)
+        state = { ...state, remainingMs: 0 };
+        handlePeriodEnd();
+      } else {
+        state = { ...state, remainingMs: remaining };
+        render();
+      }
+    }
+
+    function startTick() {
+      stopTick();
+      tickTimer = setInterval(tick, TICK_INTERVAL);
+    }
+
+    function stopTick() {
+      if (tickTimer !== null) {
+        clearInterval(tickTimer);
+        tickTimer = null;
+      }
+    }
+
+    /* ============================================================
+       PAGE VISIBILITY — catch periods that ended while tab was hidden
+       ============================================================ */
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (state.phase !== 'running') return;
+      if (state.endTime === null)    return;
+
+      if (Date.now() >= state.endTime) {
+        state = { ...state, remainingMs: 0 };
+        handlePeriodEnd();
+      }
+    });
+
+    /* ============================================================
+       PUBLIC BUTTON HANDLERS (exposed to window for onclick attrs)
+       ============================================================ */
+
+    // Main action button
+    window.handleMainButton = function () {
+      const { phase, mode } = state;
+
+      if (phase === 'idle') {
+        startPeriod();
+      } else if (phase === 'running') {
+        pausePeriod();
+      } else if (phase === 'paused') {
+        resumePeriod();
+      } else if (phase === 'ended') {
+        // Transition to the opposite mode and start immediately
+        const nextMode  = mode === 'work' ? 'break' : 'work';
+        const nextTotal = nextMode === 'work' ? WORK_MS : BREAK_MS;
+        state = {
+          ...state,
+          mode:        nextMode,
+          totalMs:     nextTotal,
+          remainingMs: nextTotal,
+          phase:       'idle',
+        };
+        startPeriod();
+      }
+    };
+
+    // Reset button
+    window.handleReset = function () {
+      stopTick();
+      const totalMs = state.mode === 'work' ? WORK_MS : BREAK_MS;
+      state = {
+        ...state,
+        phase:       'idle',
+        endTime:     null,
+        remainingMs: totalMs,
+        totalMs:     totalMs,
+        alertFired:  false,
+      };
+      render();
+    };
+
+    /* ============================================================
+       AUDIO TEST
+       ============================================================ */
+    window.testAudio = function () {
+      playTestTone();
+      state = { ...state, audioTested: true };
+
+      // Update all audio buttons and dots
+      ['btn-test-audio', 'btn-test-audio-2'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.textContent = '✓ Heard it'; el.className = 'btn-check confirmed'; }
+      });
+
+      ['audio-dot', 'audio-dot-2', 'bar-audio-dot'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.className = 'status-dot dot-green'; }
+      });
+    };
+
+    /* ============================================================
+       NOTIFICATION REQUEST
+       ============================================================ */
+    window.requestNotifications = function () {
+      if (!('Notification' in window)) {
+        setNotifUI('unsupported');
+        return;
+      }
+      if (Notification.permission === 'granted') {
+        state = { ...state, notificationsEnabled: true };
+        setNotifUI('granted');
+        return;
+      }
+      if (Notification.permission === 'denied') {
+        setNotifUI('denied');
+        return;
+      }
+      Notification.requestPermission().then(perm => {
+        state = { ...state, notificationsEnabled: perm === 'granted' };
+        setNotifUI(perm);
+      });
+    };
+
+    function setNotifUI(perm) {
+      // Buttons
+      ['btn-notif', 'btn-notif-2'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (perm === 'granted') {
+          el.textContent = '✓ Enabled'; el.className = 'btn-check confirmed';
+        } else if (perm === 'denied' || perm === 'unsupported') {
+          el.textContent = perm === 'denied' ? 'Blocked' : 'N/A';
+          el.className   = 'btn-check denied';
+        }
+      });
+
+      // Dots
+      ['notif-dot', 'notif-dot-2', 'bar-notif-dot'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (perm === 'granted') {
+          el.className = 'status-dot dot-green';
+        } else if (perm === 'denied' || perm === 'unsupported') {
+          el.className = 'status-dot dot-red';
+        }
+      });
+    }
+
+    /* ============================================================
+       FIRST-RUN MODAL
+       ============================================================ */
+    window.dismissFirstRun = function () {
+      lsSet('focus25_first_run_complete', '1');
+      state = { ...state, firstRunComplete: true };
+      document.getElementById('modal-first-run').classList.add('hidden');
+    };
+
+    /* ============================================================
+       RELIABILITY MODAL
+       ============================================================ */
+    window.showReliabilityModal = function () {
+      syncDotsToState(); // ensure state is reflected
+      document.getElementById('modal-reliability').classList.remove('hidden');
+    };
+
+    window.closeReliabilityModal = function () {
+      document.getElementById('modal-reliability').classList.add('hidden');
+    };
+
+    /* Sync all status dots and buttons to current state */
+    function syncDotsToState() {
+      // Audio
+      const audioClass = !window.AudioContext && !window.webkitAudioContext
+        ? 'dot-red'
+        : state.audioTested ? 'dot-green' : 'dot-yellow';
+
+      ['audio-dot', 'audio-dot-2', 'bar-audio-dot'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.className = `status-dot ${audioClass}`;
+      });
+
+      // Notifications
+      let notifPerm = 'default';
+      if ('Notification' in window) {
+        notifPerm = Notification.permission;
+      } else {
+        notifPerm = 'unsupported';
+      }
+
+      let notifDotClass = 'dot-yellow';
+      if (notifPerm === 'granted')   notifDotClass = 'dot-green';
+      if (notifPerm === 'denied')    notifDotClass = 'dot-red';
+      if (notifPerm === 'unsupported') notifDotClass = 'dot-red';
+
+      ['notif-dot', 'notif-dot-2', 'bar-notif-dot'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.className = `status-dot ${notifDotClass}`;
+      });
+
+      // Button labels
+      if (notifPerm === 'granted') {
+        state = { ...state, notificationsEnabled: true };
+        setNotifUI('granted');
+      } else if (notifPerm === 'denied') {
+        setNotifUI('denied');
+      }
+    }
+
+    /* ============================================================
+       BROWSER DETECTION + TIPS
+       ============================================================ */
+    function getBrowserTipsHTML() {
+      const browser = detectBrowser();
+      const tips = {
+        Chrome: `
+          <strong>Chrome</strong>
+          <ul>
+            <li>If no sound: go to <em>Site Settings → Sound</em> and allow for this page.</li>
+            <li>Chrome throttles background tabs — keep this tab visible or rely on notifications.</li>
+            <li>Enable notifications above so alerts fire even when the tab is inactive.</li>
+          </ul>`,
+        Edge: `
+          <strong>Edge</strong>
+          <ul>
+            <li>Similar to Chrome — check <em>Site Permissions → Sound</em> if audio is silent.</li>
+            <li>Enable notifications to catch period-end alerts in background tabs.</li>
+            <li>Edge may throttle inactive tabs; the app uses absolute timestamps to compensate.</li>
+          </ul>`,
+        Firefox: `
+          <strong>Firefox</strong>
+          <ul>
+            <li>Click the padlock icon → <em>Allow autoplay</em> if the test tone is silent.</li>
+            <li>Firefox has reliable background timers — minimal throttling concerns.</li>
+            <li>Notifications still recommended for fully-hidden windows.</li>
+          </ul>`,
+        Safari: `
+          <strong>Safari</strong>
+          <ul>
+            <li>Safari has a strict autoplay policy — the test tone above requires a user gesture (you just tapped Test, so you're good).</li>
+            <li>Consider pinning this tab so it stays visible.</li>
+            <li>Notifications are critical on Safari since background audio may be muted.</li>
+            <li>On iOS, add to Home Screen for best notification support.</li>
+          </ul>`,
+        Unknown: `
+          <strong>Your Browser</strong>
+          <ul>
+            <li>Make sure sound is not muted for this page.</li>
+            <li>Enable notifications for reliable alerts when the tab is hidden.</li>
+            <li>Keep this tab visible for best results.</li>
+          </ul>`,
+      };
+      return tips[browser] || tips.Unknown;
+    }
+
+    /* ============================================================
+       INITIALISATION
+       ============================================================ */
+    function init() {
+      // Inject browser tips into both modals
+      const tipsHTML = getBrowserTipsHTML();
+      const t1 = document.getElementById('browser-tips');
+      const t2 = document.getElementById('browser-tips-2');
+      if (t1) t1.innerHTML = tipsHTML;
+      if (t2) t2.innerHTML = tipsHTML;
+
+      // Check first-run flag
+      if (lsGet('focus25_first_run_complete') === '1') {
+        document.getElementById('modal-first-run').classList.add('hidden');
+        state = { ...state, firstRunComplete: true };
+      }
+      // Otherwise modal is visible by default (no hidden class in HTML)
+
+      // Sync notification permission state
+      syncDotsToState();
+
+      // Record session open
+      const analytics = loadAnalytics();
+      analytics.totals.totalSessions = (analytics.totals.totalSessions || 0) + 1;
+      saveAnalytics(analytics);
+      recordEvent('session_open', {});
+
+      // Initial render
+      render();
+    }
+
+    init();
+
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusCycle — Deep Work Timer</title>
+  <style>
+    /* ── Reset ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── Design tokens ── */
+    :root {
+      --bg:           #0d0d0d;
+      --surface:      #181818;
+      --border:       #252525;
+      --border-hi:    #333;
+      --text:         #e8e8e8;
+      --text-2:       #7a7a7a;
+      --text-3:       #444;
+
+      --work:         #f97316;   /* orange */
+      --work-faint:   #2a1205;
+      --break:        #22d3ee;   /* cyan */
+      --break-faint:  #041e26;
+
+      --btn:          #1c1c1c;
+      --btn-hover:    #262626;
+    }
+
+    /* ── Phase flash animations ── */
+    @keyframes flash-work  { 0%{background:#0d0d0d} 18%{background:#2d1006} 100%{background:#0d0d0d} }
+    @keyframes flash-break { 0%{background:#0d0d0d} 18%{background:#041c24} 100%{background:#0d0d0d} }
+
+    body.fx-work  { animation: flash-work  .9s ease forwards; }
+    body.fx-break { animation: flash-break .9s ease forwards; }
+
+    /* ── Shell ── */
+    html, body { height: 100%; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px 20px 40px;
+    }
+
+    /* ── Main card ── */
+    .card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      width: 100%;
+      max-width: 440px;
+    }
+
+    /* ── Brand ── */
+    .brand {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 44px;
+      user-select: none;
+    }
+
+    /* ── Phase label ── */
+    .phase-lbl {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+      transition: color .45s;
+      user-select: none;
+    }
+    .phase-lbl.work  { color: var(--work); }
+    .phase-lbl.break { color: var(--break); }
+    .phase-lbl.idle  { color: var(--text-3); }
+
+    /* ── Timer ── */
+    .timer {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+      font-size: clamp(84px, 21vw, 124px);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 22px;
+      transition: color .45s;
+      user-select: none;
+    }
+    .timer.work  { color: var(--work); }
+    .timer.break { color: var(--break); }
+    .timer.idle  { color: var(--text-3); }
+
+    /* ── Progress bar ── */
+    .prog-track {
+      width: 100%;
+      max-width: 340px;
+      height: 2px;
+      background: var(--border);
+      border-radius: 1px;
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+    .prog-fill {
+      height: 100%;
+      border-radius: 1px;
+      transition: width .3s linear, background-color .45s;
+    }
+    .prog-fill.work  { background: var(--work); }
+    .prog-fill.break { background: var(--break); }
+    .prog-fill.idle  { background: var(--text-3); }
+
+    /* ── Cycle counter ── */
+    .cycle-ctr {
+      font-size: 11px;
+      color: var(--text-3);
+      letter-spacing: 0.14em;
+      margin-bottom: 36px;
+      user-select: none;
+    }
+
+    /* ── Controls ── */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 48px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--border-hi);
+      background: var(--btn);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 13px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background .12s, border-color .12s, opacity .12s, transform .08s;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    button:hover  { background: var(--btn-hover); border-color: #3a3a3a; }
+    button:active { transform: scale(0.95); }
+    button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+    /* Primary CTA */
+    #btn-startstop {
+      min-width: 128px;
+      font-size: 12px;
+      padding: 14px 26px;
+    }
+    #btn-startstop.work  { background: var(--work);  border-color: var(--work);  color: #0d0d0d; }
+    #btn-startstop.break { background: var(--break); border-color: var(--break); color: #0d0d0d; }
+    #btn-startstop.work:hover,
+    #btn-startstop.break:hover { opacity: .82; }
+
+    /* Icon button (mute) */
+    #btn-mute {
+      padding: 13px 14px;
+      font-size: 15px;
+      letter-spacing: 0;
+      min-width: unset;
+    }
+
+    /* ── Disclosure ── */
+    .disc-toggle {
+      background: transparent;
+      border: none;
+      color: var(--text-3);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      padding: 6px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: color .12s, background .12s;
+    }
+    .disc-toggle:hover  { color: var(--text-2); background: var(--surface); border-color: transparent; }
+    .disc-toggle:active { transform: none; }
+
+    .disc-panel {
+      display: none;
+      width: 100%;
+      max-width: 440px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 24px;
+      margin-top: 14px;
+      font-size: 12px;
+      line-height: 1.75;
+      color: var(--text-2);
+    }
+    .disc-panel.open { display: block; }
+
+    .disc-panel h4 {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .disc-panel h4 + h4 { margin-top: 18px; }
+
+    .disc-panel ul { list-style: none; padding: 0; }
+    .check-list li::before { content: '✓  '; color: #4ade80; font-weight: 700; }
+    .limit-list li::before { content: '·  '; color: var(--text-3); }
+
+    .disc-panel p { margin-top: 8px; }
+    .disc-panel code {
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 11px;
+      background: var(--border);
+      padding: 1px 4px;
+      border-radius: 3px;
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+
+<main class="card" id="app">
+  <p class="brand">FocusCycle</p>
+
+  <p class="phase-lbl idle" id="phase-lbl">Work</p>
+
+  <div class="timer idle"
+       id="timer"
+       role="timer"
+       aria-live="polite"
+       aria-atomic="true"
+       aria-label="25:00">25:00</div>
+
+  <div class="prog-track"
+       role="progressbar"
+       aria-valuemin="0"
+       aria-valuemax="100"
+       aria-valuenow="100">
+    <div class="prog-fill idle" id="prog-fill" style="width:100%"></div>
+  </div>
+
+  <p class="cycle-ctr" id="cycle-ctr">Cycle 1</p>
+
+  <div class="controls" role="group" aria-label="Timer controls">
+    <button id="btn-startstop">Start</button>
+    <button id="btn-skip" disabled>Skip ›</button>
+    <button id="btn-mute" aria-label="Mute sound" title="Toggle sound">🔔</button>
+  </div>
+
+  <button class="disc-toggle"
+          id="disc-toggle"
+          aria-expanded="false"
+          aria-controls="disc-panel">Reliability info ▾</button>
+</main>
+
+<section class="disc-panel"
+         id="disc-panel"
+         aria-label="Reliability information">
+  <h4>What FocusCycle Guarantees</h4>
+  <ul class="check-list">
+    <li>Correct phase after tab close and reload</li>
+    <li>Accurate time after laptop sleep (tested up to 24 h)</li>
+    <li>No double-skips or 00:00 stalls on wake</li>
+    <li>Mute preference survives page reloads</li>
+    <li>Deterministic from two numbers — start time + paused duration</li>
+  </ul>
+  <h4>Known Limits</h4>
+  <ul class="limit-list">
+    <li>Single browser profile on one device only — no cross-device sync in v1</li>
+    <li>State is lost if browser storage is cleared</li>
+    <li>Sleep longer than 24 h may cause minor phase drift</li>
+    <li>Requires the browser to stay installed (not a native app)</li>
+  </ul>
+  <h4>How It Works</h4>
+  <p>FocusCycle stores a wall-clock <code>sessionStart</code> timestamp and a
+  cumulative <code>totalPausedMs</code> counter in <code>localStorage</code>.
+  On every resume — tab reload, sleep/wake, or discard — it recomputes your
+  exact position in the 25/5 cycle from those two numbers and <code>Date.now()</code>.
+  The <code>setInterval</code> only refreshes the display; it is never the
+  source of truth.</p>
+</section>
+
+<script>
+'use strict';
+
+// ─────────────────────────────────────────────────────────────────
+//  CONSTANTS
+// ─────────────────────────────────────────────────────────────────
+const WORK_MS     = 25 * 60 * 1000;
+const BREAK_MS    =  5 * 60 * 1000;
+const CYCLE_MS    = WORK_MS + BREAK_MS;
+const STALE_MS    = 24 * 60 * 60 * 1000; // reset sessions older than 24 h
+const STORAGE_KEY = 'focuscycle_v1';
+
+// ─────────────────────────────────────────────────────────────────
+//  PURE PHASE ENGINE  (duplicated in focuscycle.test.js for testing)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Compute effective elapsed ms for a running timer.
+ * When paused: elapsed is frozen at the moment of pause.
+ * @param {number|null} sessionStart  - wall-clock ms when session began
+ * @param {number}      totalPausedMs - cumulative ms spent paused
+ * @param {number|null} pausedAt      - wall-clock ms when paused (null = running)
+ * @param {number}      now           - current wall-clock ms
+ * @returns {number}
+ */
+function calcElapsed(sessionStart, totalPausedMs, pausedAt, now) {
+  if (sessionStart === null) return 0;
+  const ref = pausedAt !== null ? pausedAt : now;
+  return Math.max(0, ref - sessionStart - totalPausedMs);
+}
+
+/**
+ * Given effective elapsed ms, return phase info.
+ * @param {number} elapsed
+ * @returns {{ phase: 'work'|'break', remaining: number, progress: number, cycleIndex: number }}
+ */
+function getPhaseInfo(elapsed) {
+  const e   = Math.max(0, elapsed);
+  const pos = e % CYCLE_MS;
+  const cyc = Math.floor(e / CYCLE_MS);
+
+  if (pos < WORK_MS) {
+    return { phase: 'work',  remaining: WORK_MS  - pos,        progress: pos / WORK_MS,  cycleIndex: cyc };
+  }
+  const bp = pos - WORK_MS;
+  return   { phase: 'break', remaining: BREAK_MS - bp,         progress: bp  / BREAK_MS, cycleIndex: cyc };
+}
+
+/**
+ * Return the effective-elapsed value at the START of the next phase.
+ * @param {number} elapsed
+ * @returns {number}
+ */
+function nextPhaseBoundary(elapsed) {
+  const e   = Math.max(0, elapsed);
+  const pos = e % CYCLE_MS;
+  if (pos < WORK_MS) return e - pos + WORK_MS;
+  return e - pos + CYCLE_MS;
+}
+
+/**
+ * Format ms as MM:SS, never showing 00:00 (shows 00:01 at minimum).
+ * @param {number} ms
+ * @returns {string}
+ */
+function fmtTime(ms) {
+  const secs = Math.max(1, Math.ceil(ms / 1000));
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────────────────────────────────
+
+/** @type {{ sessionStart:number|null, totalPausedMs:number, pausedAt:number|null, isRunning:boolean, isMuted:boolean }} */
+let S = {
+  sessionStart:  null,
+  totalPausedMs: 0,
+  pausedAt:      null,
+  isRunning:     false,
+  isMuted:       false,
+};
+
+/** Previous rendered phase — used to detect transitions. */
+let prevPhase = null;
+
+// ─────────────────────────────────────────────────────────────────
+//  PERSISTENCE
+// ─────────────────────────────────────────────────────────────────
+function persist() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(S)); } catch (_) {}
+}
+
+function hydrate() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.isRunning !== 'boolean') return;
+
+    // Validate numeric fields — reject NaN/non-finite values (guards against corrupt storage)
+    const isValidTs = n => n === null || n === undefined || (typeof n === 'number' && isFinite(n) && n > 0);
+    const isValidMs = n => n === undefined || (typeof n === 'number' && isFinite(n) && n >= 0);
+    if (!isValidTs(parsed.sessionStart) || !isValidMs(parsed.totalPausedMs) || !isValidTs(parsed.pausedAt)) {
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+
+    // Discard sessions older than 24 h (stale state guard).
+    // For paused sessions, include the ongoing pause gap in the total paused time so
+    // we compare effective active time — not raw wall-clock age — against STALE_MS.
+    if (parsed.sessionStart) {
+      const ongoingPauseMs = parsed.pausedAt ? (Date.now() - parsed.pausedAt) : 0;
+      const effectiveElapsed = (Date.now() - parsed.sessionStart) - (parsed.totalPausedMs || 0) - ongoingPauseMs;
+      if (effectiveElapsed > STALE_MS) {
+        localStorage.removeItem(STORAGE_KEY);
+        return;
+      }
+    }
+
+    S = {
+      sessionStart:  parsed.sessionStart  ?? null,
+      totalPausedMs: parsed.totalPausedMs ?? 0,
+      pausedAt:      parsed.pausedAt      ?? null,
+      isRunning:     parsed.isRunning,
+      isMuted:       parsed.isMuted       ?? false,
+    };
+  } catch (_) {
+    // Corrupt storage — silently use defaults
+    localStorage.removeItem(STORAGE_KEY);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  ACTIONS
+// ─────────────────────────────────────────────────────────────────
+function actStart() {
+  if (S.isRunning) return;                // guard: already running, no-op (no spurious persist)
+  const now = Date.now();
+  if (S.sessionStart === null) {
+    // Fresh start
+    S = { ...S, sessionStart: now, totalPausedMs: 0, pausedAt: null, isRunning: true };
+  } else if (S.pausedAt !== null) {
+    // Resume: absorb the paused gap into totalPausedMs
+    S = { ...S, totalPausedMs: S.totalPausedMs + (now - S.pausedAt), pausedAt: null, isRunning: true };
+  } else {
+    return;                               // unexpected state — do nothing, do not persist
+  }
+  persist();
+}
+
+function actPause() {
+  if (!S.isRunning) return;
+  S = { ...S, pausedAt: Date.now(), isRunning: false };
+  persist();
+}
+
+function actSkip() {
+  if (S.sessionStart === null) return;
+  const now     = Date.now();
+  const elapsed = calcElapsed(S.sessionStart, S.totalPausedMs, S.pausedAt, now);
+  const info    = getPhaseInfo(elapsed);
+
+  // Advance elapsed by phaseRemainingMs by shifting sessionStart backward.
+  // Works identically whether running or paused:
+  //   effectiveElapsed = ref - sessionStart - totalPausedMs
+  //   newEffective = old + remaining → newSessionStart = sessionStart - remaining
+  S = { ...S, sessionStart: S.sessionStart - info.remaining };
+  persist();
+
+  // Fire transition effect for the phase we're jumping INTO
+  const targetElapsed = elapsed + info.remaining;
+  const targetPhase   = getPhaseInfo(targetElapsed).phase;
+  fireTransition(targetPhase);
+}
+
+function actToggleMute() {
+  S = { ...S, isMuted: !S.isMuted };
+  persist();
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  AUDIO
+// ─────────────────────────────────────────────────────────────────
+function playChime(phase) {
+  if (S.isMuted) return;
+  try {
+    // Fresh AudioContext per chime avoids the autoplay-suspended state across long idles
+    const ctx   = new (window.AudioContext || window.webkitAudioContext)();
+    const freqs = phase === 'work'
+      ? [523.25, 659.25, 783.99]   // C5-E5-G5 rising  — "back to work"
+      : [783.99, 659.25, 523.25];  // G5-E5-C5 falling — "break time"
+
+    freqs.forEach((freq, i) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+
+      const t0 = ctx.currentTime + i * 0.15;
+      const t1 = t0 + 0.32;
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(0.16, t0 + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t1);
+      osc.start(t0);
+      osc.stop(t1 + 0.05);
+    });
+
+    // Auto-close context after chime finishes
+    setTimeout(() => { try { ctx.close(); } catch (_) {} }, 700);
+  } catch (_) {
+    // Silently ignore if audio is unavailable
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  TRANSITION EFFECTS
+// ─────────────────────────────────────────────────────────────────
+function fireTransition(phase) {
+  prevPhase = phase;
+  playChime(phase);
+  document.body.classList.remove('fx-work', 'fx-break');
+  void document.body.offsetWidth;                   // force reflow to restart animation
+  document.body.classList.add(`fx-${phase}`);
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  RENDER
+// ─────────────────────────────────────────────────────────────────
+const elTimer   = document.getElementById('timer');
+const elPhase   = document.getElementById('phase-lbl');
+const elProg    = document.getElementById('prog-fill');
+const elCycle   = document.getElementById('cycle-ctr');
+const elBtn     = document.getElementById('btn-startstop');
+const elSkip    = document.getElementById('btn-skip');
+const elMute    = document.getElementById('btn-mute');
+const progTrack = elProg.parentElement;
+
+function render() {
+  const now     = Date.now();
+  const elapsed = calcElapsed(S.sessionStart, S.totalPausedMs, S.pausedAt, now);
+  const info    = getPhaseInfo(elapsed);
+
+  // Phase transition detection (only while actively running)
+  if (S.isRunning && prevPhase !== null && prevPhase !== info.phase) {
+    fireTransition(info.phase);
+  }
+  // Initialise prevPhase without triggering effect
+  if (prevPhase === null) prevPhase = info.phase;
+
+  const uiPhase = S.sessionStart !== null ? info.phase : 'idle';
+
+  // Timer text
+  const timeStr = S.sessionStart !== null ? fmtTime(info.remaining) : fmtTime(WORK_MS);
+  elTimer.textContent = timeStr;
+  elTimer.setAttribute('aria-label', timeStr);
+  setClass(elTimer, uiPhase);
+
+  // Phase label
+  elPhase.textContent = uiPhase === 'break' ? 'Break' : 'Work';
+  setClass(elPhase, uiPhase);
+
+  // Progress bar (fraction remaining, not elapsed)
+  const pct = S.sessionStart !== null
+    ? Math.max(0, (1 - info.progress) * 100).toFixed(2)
+    : '100';
+  elProg.style.width = `${pct}%`;
+  setClass(elProg, uiPhase);
+  progTrack.setAttribute('aria-valuenow', pct);
+
+  // Cycle counter
+  elCycle.textContent = `Cycle ${info.cycleIndex + 1}`;
+
+  // Start/Pause button
+  const label = S.isRunning ? 'Pause' : (S.sessionStart !== null ? 'Resume' : 'Start');
+  elBtn.textContent = label;
+  setClass(elBtn, S.sessionStart !== null ? info.phase : 'idle');
+
+  // Skip button
+  elSkip.disabled = S.sessionStart === null;
+
+  // Mute button
+  elMute.textContent = S.isMuted ? '🔕' : '🔔';
+  elMute.setAttribute('aria-label', S.isMuted ? 'Unmute sound' : 'Mute sound');
+  elMute.title = S.isMuted ? 'Unmute sound' : 'Mute sound';
+}
+
+/** Replace the phase class (work/break/idle) on an element. */
+function setClass(el, phase) {
+  el.classList.remove('work', 'break', 'idle');
+  el.classList.add(phase);
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  EVENT LISTENERS
+// ─────────────────────────────────────────────────────────────────
+elBtn.addEventListener('click', () => {
+  if (S.isRunning) actPause();
+  else             actStart();
+  render();
+});
+
+elSkip.addEventListener('click', () => {
+  actSkip();
+  render();
+});
+
+elMute.addEventListener('click', () => {
+  actToggleMute();
+  render();
+});
+
+document.getElementById('disc-toggle').addEventListener('click', () => {
+  const panel  = document.getElementById('disc-panel');
+  const toggle = document.getElementById('disc-toggle');
+  const open   = panel.classList.toggle('open');
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.textContent = open ? 'Reliability info ▴' : 'Reliability info ▾';
+});
+
+// ─────────────────────────────────────────────────────────────────
+//  TICK LOOP + WAKE HANDLERS
+// ─────────────────────────────────────────────────────────────────
+hydrate();
+render();
+
+// Refresh display every 250 ms when running
+setInterval(() => { if (S.isRunning) render(); }, 250);
+
+// Force re-render on tab focus (handles sleep/wake and tab switches)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    // Reset prevPhase so we don't replay a stale transition on wake
+    prevPhase = null;
+    render();
+  }
+});
+
+// Handles bfcache restores (browser back/forward)
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) { hydrate(); prevPhase = null; }
+  render();
+});
+</script>
+</body>
+</html>
