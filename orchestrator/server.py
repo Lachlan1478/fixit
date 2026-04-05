@@ -63,6 +63,11 @@ app = FastAPI(title="Assembly × Claude", version="1.0.0")
 _STATIC_DIR = os.path.join(_HERE, "static")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
+# Mount claude-agent/static so built apps are accessible at /apps/<filename>
+_AGENT_STATIC_DIR = os.path.join(_HERE, "..", "claude-agent", "static")
+if os.path.isdir(_AGENT_STATIC_DIR):
+    app.mount("/apps", StaticFiles(directory=_AGENT_STATIC_DIR), name="apps")
+
 # Active pipelines: session_id → Pipeline
 _pipelines: dict = {}
 
