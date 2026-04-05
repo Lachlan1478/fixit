@@ -784,7 +784,7 @@ function handleEvent(ev) {
 
     // Pivotal moments
     case 'pivotal_moment':
-      if (ev.moment === 'human_input_needed' || ev.moment === 'max_iterations_hit') {
+      if (ev.moment === 'human_input_needed' || ev.moment === 'max_iterations_hit' || ev.moment === 'rate_limited') {
         showHumanBanner(ev.message);
       }
       break;

@@ -414,19 +414,19 @@ class Pipeline:
 
     async def _handle_rate_limited(self, event: dict) -> None:
         reset_at = event.get("reset_at", "unknown")
-        await self._notify(
-            "rate_limited",
-            f"Claude rate limited during build. "
-            f"Will auto-resume at {reset_at}.",
+        msg = (
+            f"Claude usage limit hit — pipeline paused. "
+            f"Limit resets at {reset_at}. "
+            f"Reply here once it clears to resume the build."
         )
-        # Wait for rate limit to clear (rate_limit.py manages the background watcher)
-        try:
-            await asyncio.wait_for(
-                rl.state.wait_event.wait(),
-                timeout=6 * 3600,  # 6h max
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Rate limit wait timed out.")
+        self._set_state(PipelineState.AWAITING_HUMAN)
+        self._emit({"type": "pivotal_moment", "moment": "rate_limited", "message": msg})
+        await self._notify("rate_limited", msg)
+        self.s.human_input_event.clear()
+        await self.s.human_input_event.wait()
+        # Human signalled ready — resume build
+        self.s.human_input_text = ""
+        self._set_state(PipelineState.BUILDING)
 
     # ── Verdict handling ───────────────────────────────────────────────────────
 
