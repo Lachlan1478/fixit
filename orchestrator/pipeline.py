@@ -413,19 +413,44 @@ class Pipeline:
         return events
 
     async def _handle_rate_limited(self, event: dict) -> None:
-        reset_at = event.get("reset_at", "unknown")
+        from datetime import datetime, timezone
+        reset_at_str = event.get("reset_at", "")
+        try:
+            reset_at_dt = datetime.fromisoformat(reset_at_str) if reset_at_str else None
+        except ValueError:
+            reset_at_dt = None
+
+        reset_label = reset_at_dt.strftime("%H:%M UTC") if reset_at_dt else "unknown time"
         msg = (
-            f"Claude usage limit hit — pipeline paused. "
-            f"Limit resets at {reset_at}. "
-            f"Reply here once it clears to resume the build."
+            f"Claude usage limit hit — pipeline paused until {reset_label}. "
+            f"You'll be notified automatically when it resets."
         )
         self._set_state(PipelineState.AWAITING_HUMAN)
         self._emit({"type": "pivotal_moment", "moment": "rate_limited", "message": msg})
         await self._notify("rate_limited", msg)
-        self.s.human_input_event.clear()
-        await self.s.human_input_event.wait()
-        # Human signalled ready — resume build
+
+        # Start background watcher — it sleeps until reset_at then sends a notification
+        # and signals wait_until_clear(). Fall back to human_input if no reset time known.
+        if reset_at_dt:
+            rl_state = rl.get_state()
+            rl_state.set_limited(reset_at_dt)
+            asyncio.create_task(rl.watch_and_clear(reset_at_dt))
+            # Wait for automatic reset signal OR human override
+            done, _ = await asyncio.wait(
+                [
+                    asyncio.create_task(rl_state.wait_until_clear()),
+                    asyncio.create_task(self.s.human_input_event.wait()),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        else:
+            # No reset time — wait for human to manually signal
+            self.s.human_input_event.clear()
+            await self.s.human_input_event.wait()
+
         self.s.human_input_text = ""
+        self.s.human_input_event.clear()
+        await self._notify("rate_limit_cleared", "✅ Claude usage limit cleared — resuming build.")
         self._set_state(PipelineState.BUILDING)
 
     # ── Verdict handling ───────────────────────────────────────────────────────
