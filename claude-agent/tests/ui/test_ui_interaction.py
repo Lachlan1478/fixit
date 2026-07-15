@@ -57,10 +57,10 @@ def test_model_selector(ui_page):
 
 
 @pytest.mark.ui
-def test_model_selector_sonnet_default(ui_page):
-    """Sonnet is active by default."""
+def test_model_selector_opus_default(ui_page):
+    """Opus is active by default (the most capable model)."""
     ui_page.locator("#extras-btn").click()
-    expect(ui_page.locator(".model-btn[data-model='sonnet']")).to_have_class("model-btn active")
+    expect(ui_page.locator(".model-btn[data-model='opus']")).to_have_class("model-btn active")
 
 
 # ── Quick-action chips ────────────────────────────────────────────────────────
@@ -143,6 +143,8 @@ def test_reset_clears_ui(ui_page, route_task_sse):
         body=json.dumps({"agent_id": "default", "status": "reset"}),
     ))
 
+    # Reset now asks for confirmation before clearing the conversation.
+    ui_page.on("dialog", lambda d: d.accept())
     ui_page.locator("#reset-btn").click()
 
     # Feed should be cleared (empty state or only the "Session" done item)
