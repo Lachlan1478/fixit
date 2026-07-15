@@ -182,8 +182,6 @@ async def _call_reviewer(defn: dict, report: str, pipeline_session_id: str, iter
             elif event.get("type") == "text" and not result_text:
                 result_text += event.get("content", "")
     except Exception as exc:
-        cs.reset_session(agent_id)
-        raise
         logger.error("Reviewer %s CLI call failed: %s", defn["name"], exc)
         cs.reset_session(agent_id)
         return {

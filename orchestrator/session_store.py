@@ -5,11 +5,11 @@ Sessions live in memory while active; completed/error sessions are persisted
 to SQLite so they survive server restarts.
 """
 
-import asyncio
 import json
 import logging
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 _STORE: dict = {}  # session_id → PipelineSession (imported lazily to avoid circular)
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "sessions.db")
+_DB_TIMEOUT_S = 10
+
+# Serialises SQLite writes across threads (persist runs via asyncio.to_thread).
+_WRITE_LOCK = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -25,7 +29,10 @@ def _now_iso() -> str:
 
 
 def _init_db() -> None:
-    with sqlite3.connect(_DB_PATH) as conn:
+    with _WRITE_LOCK, sqlite3.connect(_DB_PATH, timeout=_DB_TIMEOUT_S) as conn:
+        # WAL lets readers proceed while a write is in flight and keeps
+        # short writes from blocking the event loop's to_thread workers.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pipeline_sessions (
                 session_id TEXT PRIMARY KEY,
@@ -76,9 +83,13 @@ def list_sessions() -> list[dict]:
 
 
 def persist(session) -> None:
-    """Write session snapshot to SQLite (non-blocking; best effort)."""
+    """
+    Write session snapshot to SQLite (best effort).
+
+    Blocking: call via `await asyncio.to_thread(persist, session)` from async code.
+    """
     try:
-        with sqlite3.connect(_DB_PATH) as conn:
+        with _WRITE_LOCK, sqlite3.connect(_DB_PATH, timeout=_DB_TIMEOUT_S) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO pipeline_sessions
                 (session_id, problem, state, mode, convergence_output, spec,
@@ -102,3 +113,29 @@ def persist(session) -> None:
             conn.commit()
     except Exception as exc:
         logger.warning("Failed to persist session %s: %s", session.session_id, exc)
+
+
+def load_persisted(session_id: str) -> Optional[dict]:
+    """Read one persisted session row back as a dict. Returns None if absent."""
+    try:
+        with sqlite3.connect(_DB_PATH, timeout=_DB_TIMEOUT_S) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM pipeline_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        logger.warning("Failed to load session %s: %s", session_id, exc)
+        return None
+
+    if row is None:
+        return None
+    data = dict(row)
+    for key in ("convergence_output", "spec", "build_outputs",
+                "reviewer_verdicts", "notifications_sent"):
+        try:
+            data[key] = json.loads(data[key]) if data[key] else None
+        except (TypeError, json.JSONDecodeError) as exc:
+            logger.warning("Bad JSON in column %s for session %s: %s", key, session_id, exc)
+            data[key] = None
+    return data

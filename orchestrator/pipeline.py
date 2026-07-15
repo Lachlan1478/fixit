@@ -50,6 +50,10 @@ logger = logging.getLogger(__name__)
 _MAX_ITERATIONS = 2
 _SPEC_APPROVAL_TIMEOUT = 300  # seconds before auto-approve
 _EXECUTOR = ThreadPoolExecutor(max_workers=4)
+_EVENT_QUEUE_MAXSIZE = 1000  # bound memory if no SSE client is consuming
+
+# GPT-4o-mini pricing: ~$0.15/1M input, $0.60/1M output (blended ~$0.30/1M)
+_OPENAI_COST_PER_TOKEN = 0.30 / 1_000_000
 
 
 class PipelineState(str, Enum):
@@ -109,7 +113,9 @@ class PipelineSession:
     build_finished_at: Optional[str] = None
 
     # Runtime (not persisted) ────────────────────────────────────────────
-    event_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    event_queue: asyncio.Queue = field(
+        default_factory=lambda: asyncio.Queue(maxsize=_EVENT_QUEUE_MAXSIZE)
+    )
     spec_approved_event: asyncio.Event = field(default_factory=asyncio.Event)
     human_input_event: asyncio.Event = field(default_factory=asyncio.Event)
     human_input_text: str = ""
@@ -169,6 +175,24 @@ class PipelineSession:
         }
 
 
+class _AssemblyEventBridge:
+    """
+    Queue-shaped adapter handed to Assembly's DashboardEventEmitter/DashboardLogger.
+
+    Assembly pushes events with `loop.call_soon_threadsafe(queue.put_nowait, ev)`,
+    so `put_nowait` always runs on the pipeline's event loop. The bridge updates
+    the pipeline's progress/cost counters at emission time and then forwards the
+    event to the real session queue — no peeking at asyncio.Queue internals.
+    """
+
+    def __init__(self, pipeline: "Pipeline") -> None:
+        self._pipeline = pipeline
+
+    def put_nowait(self, event: dict) -> None:
+        self._pipeline._track_assembly_event(event)
+        self._pipeline._emit(event)
+
+
 class Pipeline:
     """
     Orchestrates one end-to-end product-building pipeline session.
@@ -207,7 +231,8 @@ class Pipeline:
             await self._wait_for_spec_approval()
             await self._run_build_loop()
         except asyncio.CancelledError:
-            self._set_state(PipelineState.CANCELLED)
+            if self.s.state != PipelineState.CANCELLED:
+                self._set_state(PipelineState.CANCELLED)
             self._emit({"type": "pipeline_cancelled", "message": "Pipeline stopped."})
         except Exception as exc:
             logger.exception("Pipeline %s fatal error", self.s.session_id)
@@ -218,36 +243,45 @@ class Pipeline:
                 f"Pipeline error on '{self.s.problem[:60]}': {exc}",
             )
         finally:
-            store.persist(self.s)
+            # persist() blocks on SQLite — keep it off the event loop.
+            await asyncio.to_thread(store.persist, self.s)
 
     # ── Phase: IDEATING ────────────────────────────────────────────────────────
 
-    async def _ideation_progress_watcher(self, done_event: asyncio.Event) -> None:
+    def _track_assembly_event(self, event: dict) -> None:
         """
-        Background task: peek at events emitted by Assembly and emit
-        ideation_progress updates whenever phases are announced or a turn starts.
-        Runs until done_event is set.
+        Update ideation progress and OpenAI cost counters from a single Assembly
+        event. Called by _AssemblyEventBridge at the moment each event is emitted
+        (always on the pipeline's event loop via call_soon_threadsafe).
         """
-        while not done_event.is_set():
-            await asyncio.sleep(0.3)
+        if not isinstance(event, dict):
+            logger.warning("Non-dict event from Assembly emitter: %r", event)
+            return
+
+        t = event.get("type")
+        if t == "phases_generated":
+            phases = event.get("phases") or []
+            if phases and self.s.ideation_phases_total == 0:
+                self.s.ideation_phases_total = len(phases)
+                self._emit_progress()
+        elif t == "phase_complete":
+            self.s.ideation_phases_done += 1
+            self._emit_progress()
+        elif t == "turn_start":
+            self.s.ideation_current_turn = event.get("turn_num", 0)
+            self.s.ideation_max_turns = event.get("max_turns", 0)
+            self._emit_progress()
+        elif t == "turn_complete":
             try:
-                items = list(self.s.event_queue._queue)  # type: ignore[attr-defined]
-            except Exception:
-                continue
-            for item in items:
-                t = item.get("type")
-                if t == "phases_generated":
-                    phases = item.get("phases", [])
-                    if phases and self.s.ideation_phases_total == 0:
-                        self.s.ideation_phases_total = len(phases)
-                        self._emit_progress()
-                elif t == "phase_complete":
-                    self.s.ideation_phases_done += 1
-                    self._emit_progress()
-                elif t == "turn_start":
-                    self.s.ideation_current_turn = item.get("turn_num", 0)
-                    self.s.ideation_max_turns = item.get("max_turns", 0)
-                    self._emit_progress()
+                tokens = int(event.get("tokens_used") or 0)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid tokens_used in turn_complete event: %r",
+                    event.get("tokens_used"),
+                )
+                return
+            self.s.openai_tokens_used += tokens
+            self.s.openai_cost_usd = self.s.openai_tokens_used * _OPENAI_COST_PER_TOKEN
 
     def _emit_progress(self) -> None:
         self._emit({
@@ -263,15 +297,15 @@ class Pipeline:
         self.s.ideation_started_at = _now_iso()
         loop = asyncio.get_event_loop()
 
-        emitter = DashboardEventEmitter(queue=self.s.event_queue, loop=loop)
+        # The bridge tracks progress/cost counters as Assembly emits each event,
+        # then forwards to the real session queue (see _AssemblyEventBridge).
+        bridge = _AssemblyEventBridge(self)
+        emitter = DashboardEventEmitter(queue=bridge, loop=loop)
         dash_logger = DashboardLogger(
-            queue=self.s.event_queue,
+            queue=bridge,
             loop=loop,
             base_dir=os.path.join(_HERE, "conversation_logs"),
         )
-
-        watcher_done = asyncio.Event()
-        watcher_task = asyncio.create_task(self._ideation_progress_watcher(watcher_done))
 
         try:
             result = await loop.run_in_executor(
@@ -287,9 +321,6 @@ class Pipeline:
             )
         except Exception as exc:
             raise RuntimeError(f"Assembly ideation failed: {exc}") from exc
-        finally:
-            watcher_done.set()
-            watcher_task.cancel()
 
         # Extract convergence output
         if isinstance(result, dict):
@@ -300,19 +331,7 @@ class Pipeline:
             self.s.convergence_output = {}
 
         self.s.ideation_finished_at = _now_iso()
-
-        # Tally OpenAI tokens from Assembly turn_complete events in the queue snapshot
-        # GPT-4o-mini pricing: ~$0.15/1M input, $0.60/1M output (blended ~$0.30/1M)
-        _OPENAI_COST_PER_TOKEN = 0.30 / 1_000_000
-        try:
-            items = list(self.s.event_queue._queue)  # type: ignore[attr-defined]
-            for item in items:
-                if item.get("type") == "turn_complete":
-                    tok = item.get("tokens_used") or 0
-                    self.s.openai_tokens_used += tok
-            self.s.openai_cost_usd = self.s.openai_tokens_used * _OPENAI_COST_PER_TOKEN
-        except Exception:
-            pass
+        # OpenAI token/cost tallying happens live in _track_assembly_event.
 
         if not self.s.convergence_output:
             raise RuntimeError(
@@ -334,7 +353,7 @@ class Pipeline:
 
         self._set_state(PipelineState.SPEC_REVIEW)
         self.s.touch()
-        store.persist(self.s)
+        await asyncio.to_thread(store.persist, self.s)
 
     # ── Phase: SPEC_REVIEW ─────────────────────────────────────────────────────
 
@@ -512,6 +531,22 @@ class Pipeline:
 
     # ── Verdict handling ───────────────────────────────────────────────────────
 
+    async def _await_human_or_cancel(self) -> str:
+        """
+        Block until human input arrives or cancellation is requested,
+        whichever comes first. Returns "human" or "cancel".
+        """
+        self.s.human_input_event.clear()
+        human_task = asyncio.create_task(self.s.human_input_event.wait())
+        cancel_task = asyncio.create_task(self.s.cancel_event.wait())
+        done, pending = await asyncio.wait(
+            {human_task, cancel_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        return "cancel" if cancel_task in done else "human"
+
     async def _handle_verdict(self, review: dict) -> None:
         verdict = review["verdict"]
         name = self.s.spec.get("product_name", "product") if self.s.spec else "product"
@@ -524,7 +559,7 @@ class Pipeline:
                 f"'{name}' is complete after {self.s.iteration_count} iteration(s)! "
                 f"View at http://localhost:8002",
             )
-            store.persist(self.s)
+            await asyncio.to_thread(store.persist, self.s)
 
         elif verdict == "human_needed":
             reason = review["follow_up_notes"][0] if review["follow_up_notes"] else "Reviewer needs guidance."
@@ -534,9 +569,10 @@ class Pipeline:
                 "human_input_needed",
                 f"Reviewer needs your input on '{name}': {reason[:200]}",
             )
-            # Wait for human
-            self.s.human_input_event.clear()
-            await self.s.human_input_event.wait()
+            # Wait for human guidance — or a cancel request
+            if await self._await_human_or_cancel() == "cancel":
+                self._set_state(PipelineState.CANCELLED)
+                raise asyncio.CancelledError
             self._set_state(PipelineState.ITERATING)
 
         elif self.s.iteration_count >= _MAX_ITERATIONS:
@@ -551,9 +587,10 @@ class Pipeline:
                 f"'{name}' hit {_MAX_ITERATIONS} iterations without review passing. "
                 f"Manual review needed at http://localhost:8002",
             )
-            # Wait for human to unblock
-            self.s.human_input_event.clear()
-            await self.s.human_input_event.wait()
+            # Wait for human to unblock — or a cancel request
+            if await self._await_human_or_cancel() == "cancel":
+                self._set_state(PipelineState.CANCELLED)
+                raise asyncio.CancelledError
             self._set_state(PipelineState.ITERATING)
 
         else:
