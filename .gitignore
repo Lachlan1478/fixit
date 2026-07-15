@@ -25,3 +25,12 @@ tests/screenshots/
 # OS
 .DS_Store
 Thumbs.db
+
+# Orchestrator runtime state
+orchestrator/sessions.db
+orchestrator/sessions.db-wal
+orchestrator/sessions.db-shm
+orchestrator/orchestrator.log
+orchestrator/conversation_logs/
+orchestrator/meeting_logs.txt
+meeting_logs.txt
