@@ -7,13 +7,11 @@ from tools.browser import (
 )
 from tools.filesystem import read_file, write_file, list_files
 from tools.git import git_status, git_diff, git_add, git_commit
-from tools.shell import run_shell
 
 _REGISTRY = {
     "read_file": read_file,
     "write_file": write_file,
     "list_files": list_files,
-    "run_shell": run_shell,
     "git_status": git_status,
     "git_diff": git_diff,
     "git_add": git_add,

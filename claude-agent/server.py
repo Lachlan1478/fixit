@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -33,10 +34,42 @@ _LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     analytics.init_db(_LOGS_DIR)
+    if not os.environ.get("AGENT_API_KEY"):
+        logger.warning(
+            "AGENT_API_KEY is not set — API endpoints are unauthenticated "
+            "(personal-tool default). Set AGENT_API_KEY to require a bearer token."
+        )
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+# ── Auth (opt-in bearer token) ────────────────────────────────────────────────
+
+async def require_token(request: Request) -> None:
+    """
+    Opt-in bearer-token auth. Enforced only when AGENT_API_KEY is set (non-empty).
+
+    Accepts either an `Authorization: Bearer <token>` header or a `?token=`
+    query parameter. Comparison is constant-time via secrets.compare_digest.
+    """
+    api_key = os.environ.get("AGENT_API_KEY", "")
+    if not api_key:
+        return  # personal-tool default: no auth configured
+
+    supplied = ""
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        supplied = auth_header[len("bearer "):].strip()
+    if not supplied:
+        supplied = request.query_params.get("token", "")
+
+    if not supplied or not secrets.compare_digest(supplied.encode(), api_key.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API token")
+
+
+_PROTECTED = [Depends(require_token)]
 
 app.mount(
     "/static",
@@ -61,7 +94,7 @@ class ResetMemoryRequest(BaseModel):
     agent_id: str
 
 
-@app.post("/task")
+@app.post("/task", dependencies=_PROTECTED)
 async def run_task(request: TaskRequest):
     """Stream Claude's work as SSE. Each event is 'data: <json>\\n\\n'."""
     if not request.prompt.strip():
@@ -114,7 +147,7 @@ async def rate_limit_status():
     return rl.get_state().to_dict()
 
 
-@app.get("/history/{agent_id}")
+@app.get("/history/{agent_id}", dependencies=_PROTECTED)
 async def get_history(agent_id: str):
     return {"history": cs.get_history(agent_id)}
 
@@ -151,13 +184,13 @@ def _build_tree(abs_path: str, rel_path: str, depth: int) -> dict:
     return node
 
 
-@app.get("/tree")
+@app.get("/tree", dependencies=_PROTECTED)
 async def get_tree(depth: int = 4):
     depth = max(1, min(depth, 6))
     return _build_tree(WORKSPACE_ROOT, "", depth)
 
 
-@app.get("/files")
+@app.get("/files", dependencies=_PROTECTED)
 async def list_files(path: str = ""):
     if path:
         abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
@@ -183,7 +216,7 @@ async def list_files(path: str = ""):
     return {"path": "" if rel_cur == "." else rel_cur, "dirs": dirs, "files": files}
 
 
-@app.post("/reset_memory")
+@app.post("/reset_memory", dependencies=_PROTECTED)
 async def reset_memory(request: ResetMemoryRequest):
     agent_id = request.agent_id.strip()
     if not agent_id:
@@ -192,7 +225,7 @@ async def reset_memory(request: ResetMemoryRequest):
     return {"agent_id": agent_id, "status": "reset"}
 
 
-@app.get("/repo")
+@app.get("/repo", dependencies=_PROTECTED)
 async def get_repo():
     status_out = await _git_status(WORKSPACE_ROOT)
     diff_out = await _git_diff(WORKSPACE_ROOT)
@@ -216,6 +249,45 @@ async def get_repo():
     }
 
 
+# ── Workspace path resolution + sensitive-file blocklist ─────────────────────
+
+_BLOCKED_FILE_EXTS = {".db"}
+
+
+def _resolve_workspace_path(path: str, outside_status: int = 403) -> str:
+    """
+    Resolve a user-supplied path and enforce workspace containment.
+
+    Uses os.path.realpath on both sides (resolves symlinks / 8.3 names) and a
+    case-insensitive commonpath comparison (Windows). Raises HTTPException with
+    `outside_status` if the resolved path escapes WORKSPACE_ROOT.
+    """
+    if "\x00" in path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    candidate = path if os.path.isabs(path) else os.path.join(WORKSPACE_ROOT, path)
+    abs_path = os.path.realpath(candidate)
+    root = os.path.realpath(WORKSPACE_ROOT)
+    try:
+        inside = os.path.commonpath(
+            [os.path.normcase(root), os.path.normcase(abs_path)]
+        ) == os.path.normcase(root)
+    except ValueError:  # e.g. different drives on Windows
+        inside = False
+    if not inside:
+        raise HTTPException(status_code=outside_status, detail="Path outside workspace")
+    return abs_path
+
+
+def _reject_sensitive_path(abs_path: str) -> None:
+    """403 for dotfile/dot-directory components (.env, .git, …) and .db files."""
+    rel = os.path.relpath(abs_path, os.path.realpath(WORKSPACE_ROOT))
+    components = rel.replace("\\", "/").split("/")
+    if any(part.startswith(".") and part != "." for part in components):
+        raise HTTPException(status_code=403, detail="Access to this path is forbidden")
+    if os.path.splitext(abs_path)[1].lower() in _BLOCKED_FILE_EXTS:
+        raise HTTPException(status_code=403, detail="Access to this file type is forbidden")
+
+
 _IMAGE_MIMETYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -226,15 +298,11 @@ _IMAGE_MIMETYPES = {
 }
 
 
-@app.get("/image")
+@app.get("/image", dependencies=_PROTECTED)
 async def get_image(path: str):
     """Serve an image file from within the workspace."""
-    if os.path.isabs(path):
-        abs_path = os.path.normpath(path)
-    else:
-        abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
-    if not (abs_path.startswith(WORKSPACE_ROOT + os.sep) or abs_path == WORKSPACE_ROOT):
-        raise HTTPException(status_code=403, detail="Path outside workspace")
+    abs_path = _resolve_workspace_path(path, outside_status=403)
+    _reject_sensitive_path(abs_path)
     if not os.path.isfile(abs_path):
         raise HTTPException(status_code=404, detail="File not found")
     ext = os.path.splitext(abs_path)[1].lower()
@@ -243,15 +311,11 @@ async def get_image(path: str):
     return FileResponse(abs_path, media_type=_IMAGE_MIMETYPES[ext])
 
 
-@app.get("/serve")
+@app.get("/serve", dependencies=_PROTECTED)
 async def serve_raw(path: str):
     """Serve a workspace file with correct Content-Type (for iframe preview)."""
-    if os.path.isabs(path):
-        abs_path = os.path.normpath(path)
-    else:
-        abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
-    if not (abs_path.startswith(WORKSPACE_ROOT + os.sep) or abs_path == WORKSPACE_ROOT):
-        raise HTTPException(status_code=403, detail="Path outside workspace")
+    abs_path = _resolve_workspace_path(path, outside_status=403)
+    _reject_sensitive_path(abs_path)
     if not os.path.isfile(abs_path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(abs_path)
@@ -270,9 +334,10 @@ class TelemetryEvent(BaseModel):
     ts: str | None = None
 
 
-@app.post("/telemetry")
+@app.post("/telemetry", dependencies=_PROTECTED)
 async def post_telemetry(event: TelemetryEvent):
-    analytics.record_telemetry(
+    await asyncio.to_thread(
+        analytics.record_telemetry,
         session_key=event.session_key,
         agent_id=event.agent_id,
         event_type=event.event_type,
@@ -282,49 +347,45 @@ async def post_telemetry(event: TelemetryEvent):
     return {"ok": True}
 
 
-@app.get("/analytics/summary")
+@app.get("/analytics/summary", dependencies=_PROTECTED)
 async def analytics_summary():
-    return analytics.query_summary()
+    return await asyncio.to_thread(analytics.query_summary)
 
 
-@app.get("/analytics/sessions")
+@app.get("/analytics/sessions", dependencies=_PROTECTED)
 async def analytics_sessions(limit: int = 50, offset: int = 0):
-    return {"sessions": analytics.query_sessions(limit=limit, offset=offset)}
+    return {"sessions": await asyncio.to_thread(analytics.query_sessions, limit=limit, offset=offset)}
 
 
-@app.get("/analytics/tools")
+@app.get("/analytics/tools", dependencies=_PROTECTED)
 async def analytics_tools(limit: int = 30):
-    return {"tools": analytics.query_tools(limit=limit)}
+    return {"tools": await asyncio.to_thread(analytics.query_tools, limit=limit)}
 
 
-@app.get("/analytics/perf")
+@app.get("/analytics/perf", dependencies=_PROTECTED)
 async def analytics_perf():
-    return analytics.query_perf()
+    return await asyncio.to_thread(analytics.query_perf)
 
 
-@app.get("/analytics/cost")
+@app.get("/analytics/cost", dependencies=_PROTECTED)
 async def analytics_cost(days: int = 30):
-    return {"days": days, "data": analytics.query_cost(days=days)}
+    return {"days": days, "data": await asyncio.to_thread(analytics.query_cost, days=days)}
 
 
-@app.get("/analytics/telemetry/summary")
+@app.get("/analytics/telemetry/summary", dependencies=_PROTECTED)
 async def analytics_telemetry_summary():
-    return {"events": analytics.query_telemetry_summary()}
+    return {"events": await asyncio.to_thread(analytics.query_telemetry_summary)}
 
 
-@app.get("/analytics/rate_limits")
+@app.get("/analytics/rate_limits", dependencies=_PROTECTED)
 async def analytics_rate_limits(limit: int = 20):
-    return {"events": analytics.query_rate_limit_events(limit=limit)}
+    return {"events": await asyncio.to_thread(analytics.query_rate_limit_events, limit=limit)}
 
 
-@app.get("/file")
+@app.get("/file", dependencies=_PROTECTED)
 async def get_file(path: str):
-    if os.path.isabs(path):
-        abs_path = os.path.normpath(path)
-    else:
-        abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
-    if not (abs_path.startswith(WORKSPACE_ROOT + os.sep) or abs_path == WORKSPACE_ROOT):
-        raise HTTPException(status_code=400, detail="Path outside workspace")
+    abs_path = _resolve_workspace_path(path, outside_status=400)
+    _reject_sensitive_path(abs_path)
     if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
         return {"content": None, "exists": False}
     content = await _read_file(abs_path)
