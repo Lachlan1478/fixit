@@ -4,29 +4,41 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Assembly × Claude</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%237c6af7'/><text x='16' y='22' text-anchor='middle' font-size='18' font-family='monospace' fill='white'>×</text></svg>">
+<meta name="theme-color" content="#0C1210">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230C1210'/><text x='16' y='22' text-anchor='middle' font-size='18' font-family='monospace' fill='%23F2A33C'>×</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ── Dispatch console theme ─────────────────────────────────────────────────
+   The pipeline is an assembly line for software: four stations (ideate → spec →
+   build → review) that a problem travels along. Dressed as a phosphor terminal —
+   ink-green black with warm amber working light and oscilloscope-teal for done. */
 :root {
-  --bg:       #0f0f11;
-  --surface:  #1a1a1f;
-  --surface2: #242429;
-  --border:   #2e2e36;
-  --accent:   #7c6af7;
-  --accent2:  #a78bfa;
-  --green:    #22c55e;
-  --red:      #ef4444;
-  --yellow:   #eab308;
-  --orange:   #f97316;
-  --text:     #e8e8f0;
-  --muted:    #7a7a90;
-  --pass:     #22c55e;
-  --iterate:  #eab308;
-  --human:    #f97316;
+  --bg:       #0C1210;
+  --surface:  #121A17;
+  --surface2: #1A2420;
+  --border:   #24322C;
+  --border-hi:#35473E;
+  --accent:   #F2A33C;   /* amber phosphor — the working light */
+  --accent2:  #F0B968;   /* softer amber, for speaker/secondary accents */
+  --accent-deep: #C77F24;
+  --green:    #4FD6A0;   /* oscilloscope teal */
+  --red:      #E86A5C;
+  --yellow:   #E8C15A;
+  --orange:   #F2A33C;
+  --text:     #C8D6CC;
+  --muted:    #6E8478;
+  --pass:     #4FD6A0;
+  --iterate:  #E8C15A;
+  --human:    #F2A33C;
+  --mono:     'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
+  --display:  'Archivo', system-ui, -apple-system, sans-serif;
 }
 
-html, body { height: 100%; background: var(--bg); color: var(--text); font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 13px; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; }
 
 /* ── Scrollbars ── */
 ::-webkit-scrollbar { width: 4px; }
@@ -43,7 +55,11 @@ header {
   padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
   flex-shrink: 0; position: relative;
 }
-header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
+header h1 { font-family: var(--display); font-size: 14px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: var(--text); }
+.status-dot { box-shadow: 0 0 0 3px rgba(110,132,120,.15); }
+.status-dot.ideating, .status-dot.building, .status-dot.reviewing,
+.status-dot.awaiting_human, .status-dot.iterating { box-shadow: 0 0 8px currentColor, 0 0 0 3px rgba(242,163,60,.18); }
+.status-dot.complete { box-shadow: 0 0 8px var(--green), 0 0 0 3px rgba(79,214,160,.18); }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
   transition: background 0.3s; flex-shrink: 0;
@@ -128,11 +144,23 @@ header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
   overflow: hidden; min-height: 0;
 }
 .panel:last-child { border-right: none; }
+/* Panel headers are stations on the assembly line: an amber station lamp,
+   a hairline rail beneath, and a step index carried by data-step. */
 .panel-header {
-  padding: 8px 12px; background: var(--surface2);
-  border-bottom: 1px solid var(--border); font-size: 11px;
-  font-weight: 600; color: var(--muted); text-transform: uppercase;
-  letter-spacing: .05em; flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; background: linear-gradient(180deg, var(--surface2), var(--surface));
+  border-bottom: 1px solid var(--accent-deep); font-family: var(--mono); font-size: 10.5px;
+  font-weight: 700; color: var(--accent); text-transform: uppercase;
+  letter-spacing: .14em; flex-shrink: 0; display: flex; align-items: center; gap: 9px;
+  position: relative;
+}
+.panel-header::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 7px var(--accent); flex-shrink: 0;
+}
+.panel-header { padding-right: 34px; }
+.panel-header[data-step]::after {
+  content: attr(data-step); position: absolute; top: 9px; right: 12px;
+  font-size: 9px; color: var(--muted); letter-spacing: .1em; font-weight: 500;
 }
 .panel-body { flex: 1; overflow-y: auto; padding: 10px; }
 
@@ -164,22 +192,24 @@ select, .btn {
   border-radius: 5px; padding: 6px 12px; font-family: inherit; font-size: 12px; cursor: pointer;
 }
 select:focus, .btn:focus { outline: none; border-color: var(--accent); }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-.btn-primary:hover { background: var(--accent2); border-color: var(--accent2); }
-.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-.btn-green  { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
-.btn-green:hover { background: var(--green); }
-.btn-orange { background: #c2410c; border-color: #c2410c; color: #fff; font-weight: 600; }
+.btn { font-family: var(--display); letter-spacing: .03em; transition: box-shadow .2s, background .2s, border-color .2s; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #17110A; font-weight: 700; }
+.btn-primary:hover { background: var(--accent2); border-color: var(--accent2); box-shadow: 0 0 14px rgba(242,163,60,.35); }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+.btn-green  { background: var(--green); border-color: var(--green); color: #08150F; font-weight: 700; }
+.btn-green:hover { box-shadow: 0 0 14px rgba(79,214,160,.35); }
+.btn-orange { background: transparent; border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.btn-orange:hover { background: rgba(242,163,60,.12); }
 
 #loading-hint { font-size: 10px; color: var(--muted); margin-left: 6px; display: none; }
 #loading-hint.visible { display: inline; }
 
 /* ── Human input banner ── */
 #human-banner {
-  display: none; background: #7c2d12; border: 1px solid var(--human);
+  display: none; background: linear-gradient(180deg, rgba(242,163,60,.10), rgba(242,163,60,.04)); border: 1px solid var(--human);
   border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
 }
-#human-banner p { color: #fed7aa; font-size: 12px; margin-bottom: 6px; }
+#human-banner p { color: var(--accent2); font-size: 12px; margin-bottom: 6px; }
 #human-input { width: 100%; background: var(--surface2); border: 1px solid var(--border);
   color: var(--text); border-radius: 5px; padding: 6px 10px; font-family: inherit;
   font-size: 12px; margin-bottom: 6px; }
@@ -197,7 +227,7 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 8px 0;
 }
 .idea-pill {
-  display: inline-block; background: #1e1b4b; border: 1px solid var(--accent);
+  display: inline-block; background: rgba(242,163,60,.10); border: 1px solid var(--accent);
   border-radius: 12px; padding: 2px 8px; font-size: 10px; color: var(--accent2); margin: 2px;
 }
 
@@ -218,12 +248,12 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
   font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px;
   display: inline-block; margin-bottom: 3px;
 }
-.fi-tool   .fi-label { background: #312e81; color: var(--accent2); }
+.fi-tool   .fi-label { background: rgba(242,163,60,.16); color: var(--accent2); }
 .fi-text   .fi-label { background: var(--surface2); color: var(--muted); }
 .fi-done   .fi-label { background: #14532d; color: var(--green); }
 .fi-error  .fi-label { background: #450a0a; color: var(--red); }
 .fi-status .fi-label { background: var(--surface2); color: var(--muted); }
-.fi-image  .fi-label { background: #1a1a2e; color: var(--accent); }
+.fi-image  .fi-label { background: rgba(242,163,60,.10); color: var(--accent); }
 .feed-item .fi-body { font-size: 12px; color: var(--muted); line-height: 1.4; padding: 4px 6px; }
 .fi-text .fi-body, .fi-done .fi-body { color: var(--text); }
 .fi-image img { max-width: 100%; border-radius: 4px; margin-top: 4px; cursor: zoom-in; }
@@ -236,11 +266,11 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 /* View app link */
 .view-app-link {
   display: flex; align-items: center; gap: 6px;
-  background: #1e1b4b; border: 1px solid var(--accent); border-radius: 6px;
+  background: rgba(242,163,60,.10); border: 1px solid var(--accent); border-radius: 6px;
   padding: 6px 10px; margin-bottom: 8px; text-decoration: none;
   font-size: 11px; color: var(--accent2); animation: slideIn .3s ease;
 }
-.view-app-link:hover { background: #2d2a5e; color: var(--accent2); }
+.view-app-link:hover { background: rgba(242,163,60,.20); color: var(--accent2); }
 
 /* ── Reviewer panel (Panel D) ── */
 .reviewer-card { background: var(--surface2); border-radius: 6px; padding: 10px; margin-bottom: 8px; }
@@ -453,7 +483,7 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 
     <!-- Panel A: Ideation -->
     <div class="panel active" id="panel-0">
-      <div class="panel-header">
+      <div class="panel-header" data-step="01 / 04">
         <span>Ideation</span>
         <span id="phase-label" style="color:var(--accent);font-size:10px;"></span>
         <button id="stop-btn" onclick="stopPipeline()" aria-label="Stop pipeline"
@@ -479,7 +509,7 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 
     <!-- Panel B: Spec -->
     <div class="panel active" id="panel-1">
-      <div class="panel-header">Spec</div>
+      <div class="panel-header" data-step="02 / 04">Spec</div>
       <div class="panel-body" id="spec-panel">
         <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;line-height:1.7;">
           Solution spec will appear here<br>once Assembly finishes.
@@ -489,7 +519,7 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 
     <!-- Panel C: Claude Build -->
     <div class="panel active" id="panel-2">
-      <div class="panel-header">
+      <div class="panel-header" data-step="03 / 04">
         <span>Claude Build</span>
         <span id="iter-label" style="color:var(--muted);font-size:10px;margin-left:auto;"></span>
       </div>
@@ -502,7 +532,7 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 
     <!-- Panel D: Reviewer -->
     <div class="panel active" id="panel-3">
-      <div class="panel-header">Reviewer</div>
+      <div class="panel-header" data-step="04 / 04">Reviewer</div>
       <div class="panel-body" id="reviewer-panel">
         <div style="color:var(--muted);font-size:12px;text-align:center;padding:40px 16px;line-height:1.7;">
           QA verdicts will appear here<br>after each build iteration.
@@ -568,6 +598,30 @@ select:focus, .btn:focus { outline: none; border-color: var(--accent); }
 <script>
 'use strict';
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+function authHeaders() {
+  try {
+    const token = localStorage.getItem('agent_token');
+    return token ? { 'Authorization': 'Bearer ' + token } : {};
+  } catch (_) { return {}; }
+}
+
+let _authPromptShown = false;
+// fetch() wrapper: attaches bearer token when present; on 401, asks once for a token.
+async function apiFetch(url, opts = {}) {
+  const resp = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...authHeaders() } });
+  if (resp.status === 401 && !_authPromptShown) {
+    _authPromptShown = true;
+    const token = window.prompt('This server requires an API token (401 Unauthorized).\nEnter your agent token:');
+    if (token && token.trim()) {
+      try { localStorage.setItem('agent_token', token.trim()); } catch (_) {}
+      _authPromptShown = false; // token saved — allow re-prompt if it turns out invalid
+      alert('Token saved — please retry your last action.');
+    }
+  }
+  return resp;
+}
+
 let _sessionId = null;
 let _evtSource = null;
 let _state = 'idle';
@@ -584,7 +638,7 @@ function switchTab(idx) {
 // ── Session history ───────────────────────────────────────────────────────────
 async function loadSessionHistory() {
   try {
-    const res = await fetch('/pipeline/sessions/list');
+    const res = await apiFetch('/pipeline/sessions/list');
     const sessions = await res.json();
     const picker = document.getElementById('session-picker');
     // Keep the placeholder option, replace the rest
@@ -606,7 +660,7 @@ async function loadSession(sessionId) {
   picker.value = '';
 
   try {
-    const res = await fetch(`/pipeline/${sessionId}`);
+    const res = await apiFetch(`/pipeline/${sessionId}`);
     if (!res.ok) return;
     const d = await res.json();
     _sessionId = sessionId;
@@ -651,7 +705,7 @@ async function loadSession(sessionId) {
 async function stopPipeline() {
   if (!_sessionId) return;
   document.getElementById('stop-btn').disabled = true;
-  await fetch(`/pipeline/${_sessionId}/cancel`, { method: 'POST' });
+  await apiFetch(`/pipeline/${_sessionId}/cancel`, { method: 'POST' });
 }
 
 // ── Start pipeline ────────────────────────────────────────────────────────────
@@ -681,7 +735,7 @@ async function startPipeline() {
   _builtAppUrl = null;
 
   try {
-    const res = await fetch('/pipeline/start', {
+    const res = await apiFetch('/pipeline/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({problem, mode, auto_approve_spec: autoApprove, purpose: document.getElementById('purpose-select').value}),
@@ -1022,7 +1076,7 @@ async function approveSpec() {
   if (!_sessionId) return;
   document.getElementById('approve-btn').disabled = true;
   try {
-    const res = await fetch(`/pipeline/${_sessionId}/approve_spec`, {
+    const res = await apiFetch(`/pipeline/${_sessionId}/approve_spec`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({spec: window._pendingSpec || null}),
@@ -1089,7 +1143,7 @@ async function sendHumanInput() {
   if (!msg) { alert('Please type your guidance.'); return; }
   if (!_sessionId) return;
   try {
-    const res = await fetch(`/pipeline/${_sessionId}/human_input`, {
+    const res = await apiFetch(`/pipeline/${_sessionId}/human_input`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({message: msg}),
@@ -1136,7 +1190,7 @@ function toggleSection(titleEl) {
 async function fetchAndUpdateDrawer() {
   if (!_sessionId) return;
   try {
-    const res = await fetch(`/pipeline/${_sessionId}`);
+    const res = await apiFetch(`/pipeline/${_sessionId}`);
     if (!res.ok) return;
     const d = await res.json();
     _sessionData = d;
