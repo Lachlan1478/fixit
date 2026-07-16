@@ -19,6 +19,7 @@ def _done_sse() -> str:
 @pytest.mark.ui
 def test_tab_switch(ui_page):
     """Clicking the 'frontend' tab makes it active and deactivates 'default'."""
+    ui_page.locator("#menu-btn").click()  # agent tabs live in the Explorer drawer
     frontend_tab = ui_page.locator(".agent-tab[data-agent='frontend']")
     default_tab  = ui_page.locator(".agent-tab[data-agent='default']")
 
@@ -31,6 +32,7 @@ def test_tab_switch(ui_page):
 @pytest.mark.ui
 def test_add_tab(ui_page):
     """Clicking '+' and confirming a name creates a new active tab."""
+    ui_page.locator("#menu-btn").click()  # agent tabs live in the Explorer drawer
     ui_page.on("dialog", lambda d: d.accept("mybot"))
     ui_page.locator(".tab-add").click()
 
@@ -91,8 +93,8 @@ def test_clear_feed(ui_page, route_task_sse):
     ui_page.locator("#send-btn").click()
     ui_page.wait_for_selector(".feed-item.done", timeout=5_000)
 
-    # Scope to the Live Feed section to avoid matching the history Clear button
-    ui_page.locator("section:has(#feed-list) button.secondary").click()
+    # Clear the terminal via its toolbar button
+    ui_page.locator("#clear-feed-btn").click()
 
     expect(ui_page.locator(".feed-empty")).to_be_visible()
     expect(ui_page.locator(".feed-item")).to_have_count(0)
