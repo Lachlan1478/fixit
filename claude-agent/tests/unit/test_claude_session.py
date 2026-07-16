@@ -170,3 +170,15 @@ def test_idle_timeout_from_env(monkeypatch):
 def test_idle_timeout_invalid_falls_back(monkeypatch):
     monkeypatch.setenv("CLAUDE_IDLE_TIMEOUT_S", "not-a-number")
     assert cs._idle_timeout_s() == cs._DEFAULT_IDLE_TIMEOUT_S
+
+
+# ── system prompt tests ───────────────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_system_prompt_pins_absolute_workspace_root():
+    """The system prompt must state the absolute workspace root so Claude does
+    not guess a similarly-named sibling directory (regression: files were
+    written to ...\claude-phone instead of ...\claude_phone)."""
+    assert cs.WORKSPACE_ROOT in cs._SYSTEM_PROMPT
+    # No unrendered f-string placeholders left behind.
+    assert "{" not in cs._SYSTEM_PROMPT and "}" not in cs._SYSTEM_PROMPT

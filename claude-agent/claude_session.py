@@ -48,7 +48,7 @@ _agent_locks: dict[str, asyncio.Lock] = {}
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
 # System prompt injected into every Claude session so it can exploit the UI features
-_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT = f"""\
 You are running inside **Claude Agent** — a mobile-first developer interface. \
 Images you produce appear inline in the user's feed as tappable thumbnails.
 
@@ -80,8 +80,11 @@ If playwright isn't installed, install it first:
 
 ## Workspace
 
-- Root is the parent of claude-agent/.
-- Use workspace-relative paths (e.g. claude-agent/static/screenshots/result.png).
+- Your current working directory IS the project root: {WORKSPACE_ROOT}
+- Write files using paths relative to that directory (e.g. claude-agent/static/result.html), \
+or absolute paths that start with the exact root above.
+- Never write to a similarly-named sibling directory. Files written outside this root do NOT \
+appear in the user's file browser or live preview, so the work looks lost.
 """
 
 # Short name → full model ID

@@ -670,12 +670,16 @@ function clearHistory() {
 let _hasFeed = false;
 // Maps tool_use_id → feed item element (for bash expansion)
 const _toolFeedItems = {};
+// Maps tool_use_id → preview URL for an HTML Write, loaded once the write
+// completes (the tool_result) so the iframe doesn't race the file being written.
+const _pendingPreview = {};
 
 function clearFeed() {
   document.getElementById('feed-list').innerHTML = '<div class="feed-empty">No activity yet</div>';
   _hasFeed = false;
   // Clear the bash expansion index to avoid holding detached DOM nodes
   for (const k of Object.keys(_toolFeedItems)) delete _toolFeedItems[k];
+  for (const k of Object.keys(_pendingPreview)) delete _pendingPreview[k];
 }
 
 function addFeedItem(type, label, summary, elapsed_ms, toolUseId) {
@@ -737,7 +741,10 @@ function updatePreview(url) {
   const urlEl     = document.getElementById('preview-url');
   const fullUrl   = url.startsWith('http') ? url : window.location.origin + url;
   urlEl.textContent = fullUrl;
-  frame.src = fullUrl + '?_t=' + Date.now();   // cache-bust
+  // Cache-bust with the correct separator — the URL may already carry a query
+  // string (e.g. /serve?path=…), where a second '?' would fold _t into the path.
+  const sep = fullUrl.includes('?') ? '&' : '?';
+  frame.src = fullUrl + sep + '_t=' + Date.now();
   section.classList.add('visible');
 }
 
@@ -995,15 +1002,26 @@ function handleEvent(event, originAgentId) {
       }
     }
 
-    // Live preview: reload iframe whenever Claude writes an HTML file
+    // Live preview: queue an HTML Write and load it once the write completes
+    // (on tool_result) so the iframe doesn't race the file onto disk. If the
+    // write has no tool_use_id to correlate, fall back to loading immediately.
     if (event.name === 'Write') {
       const path = (event.input && event.input.file_path) || '';
       if (path.endsWith('.html')) {
-        updatePreview('/serve?path=' + encodeURIComponent(path));
+        const url = '/serve?path=' + encodeURIComponent(path);
+        if (event.tool_use_id) _pendingPreview[event.tool_use_id] = url;
+        else updatePreview(url);
       }
     }
 
   } else if (event.type === 'tool_result') {
+    // Load a queued HTML preview now that the write has landed on disk.
+    const previewUrl = _pendingPreview[event.tool_use_id];
+    if (previewUrl) {
+      delete _pendingPreview[event.tool_use_id];
+      if (!event.is_error) updatePreview(previewUrl);
+    }
+
     // Attach expandable bash output to the matching feed item
     const el = _toolFeedItems[event.tool_use_id];
     if (el) {
@@ -1054,6 +1072,13 @@ function handleEvent(event, originAgentId) {
     if (label) addFeedItem('status', 'Usage', label);
 
   } else if (event.type === 'done') {
+    // Flush any HTML preview still queued (e.g. a Write with no tool_result);
+    // by 'done' the file is certainly on disk.
+    for (const id of Object.keys(_pendingPreview)) {
+      const url = _pendingPreview[id];
+      delete _pendingPreview[id];
+      updatePreview(url);
+    }
     addFeedItem('done', 'Done', String(event.result || '').slice(0, 100) || '✓');
     telemetry('task_completed', { result_len: (event.result || '').length });
     setTimeout(() => switchView('chat'), 1500);
