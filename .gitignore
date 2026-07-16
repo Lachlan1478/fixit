@@ -34,3 +34,6 @@ orchestrator/orchestrator.log
 orchestrator/conversation_logs/
 orchestrator/meeting_logs.txt
 meeting_logs.txt
+
+# Local access token for the phone server
+.agent_token
