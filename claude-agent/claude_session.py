@@ -105,6 +105,12 @@ _PERMISSION_MODES: dict[str, str] = {
 }
 _DEFAULT_MODE = "auto"
 
+# The CLI can't do interactive per-tool approval in headless (--print) mode —
+# it emits no permission prompts to answer. So "acceptEdits" is enforced as a
+# static policy: file edits + reads run automatically, but the shell tools are
+# removed from Claude's toolset entirely, so no commands can run.
+_ACCEPT_EDITS_BLOCK = ["Bash", "PowerShell"]
+
 
 def get_history(agent_id: str) -> list[dict]:
     return _conversation_history.get(agent_id, [])
@@ -261,6 +267,9 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str) -
         "--model", model_id,
         "--system-prompt", _SYSTEM_PROMPT,
     ]
+    if mode == "acceptEdits":
+        # Block the shell tools so edits auto-apply but no commands run.
+        cmd += ["--disallowedTools", *_ACCEPT_EDITS_BLOCK]
     if session_id:
         cmd += ["--resume", session_id]
 
