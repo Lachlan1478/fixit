@@ -18,15 +18,19 @@ def _done_sse() -> str:
 
 @pytest.mark.ui
 def test_tab_switch(ui_page):
-    """Clicking the 'frontend' tab makes it active and deactivates 'default'."""
+    """Adding an agent activates it; clicking 'default' switches back."""
     ui_page.locator("#menu-btn").click()  # agent tabs live in the Explorer drawer
+    ui_page.on("dialog", lambda d: d.accept("frontend"))
+    ui_page.locator(".tab-add").click()
+
     frontend_tab = ui_page.locator(".agent-tab[data-agent='frontend']")
     default_tab  = ui_page.locator(".agent-tab[data-agent='default']")
 
-    frontend_tab.click()
-
     expect(frontend_tab).to_have_class("agent-tab active")
-    expect(default_tab).not_to_have_class("active")
+
+    default_tab.click()
+    expect(default_tab).to_have_class("agent-tab active")
+    expect(frontend_tab).not_to_have_class("active")
 
 
 @pytest.mark.ui

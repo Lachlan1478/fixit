@@ -374,8 +374,6 @@
       <div class="drawer-head"><span>EXPLORER</span><button class="ghost" onclick="closeDrawer()" aria-label="Close Explorer">×</button></div>
       <div class="drawer-agents" id="tab-bar">
         <button class="agent-tab active" data-agent="default" onclick="switchAgent('default')">default</button>
-        <button class="agent-tab" data-agent="frontend" onclick="switchAgent('frontend')">frontend</button>
-        <button class="agent-tab" data-agent="backend" onclick="switchAgent('backend')">backend</button>
         <button class="tab-add" onclick="addAgentTab()" title="New agent" aria-label="New agent">+</button>
       </div>
       <div class="proj-head">CLAUDE_PHONE</div>
@@ -444,7 +442,7 @@ function telemetry(eventType, payload) {
 let _agentId = 'default';
 let _clearedAtIndex = 0;
 let _lastHistoryLen = 0;
-let _agentTabNames = ['default', 'frontend', 'backend'];
+let _agentTabNames = ['default'];
 
 // In-flight SSE streams: { controller: AbortController, agentId: string }
 const _inflightStreams = new Set();
