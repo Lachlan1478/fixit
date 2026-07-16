@@ -194,6 +194,9 @@
     .model-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .model-btn:disabled { opacity: .4; }
     .extras-divider { height: 1px; background: var(--border); margin: 6px 0; }
+    .extras-label { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #7a7a7a; margin: 0 0 4px 2px; }
+    .mode-btn { flex: 1; background: #333333; color: #b0b0b0; border: 1px solid var(--border-hi); border-radius: 3px; padding: 6px 0; font-size: 11px; font-family: var(--mono); font-weight: 600; cursor: pointer; }
+    .mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .extras-chip { display: block; width: 100%; text-align: left; background: none; border: none; color: #b0b0b0; padding: 6px 8px; font-size: 12px; border-radius: 3px; cursor: pointer; font-family: var(--body); }
     .extras-chip:active { background: var(--sel-hover); color: #fff; }
 
@@ -355,6 +358,13 @@
               <button class="model-btn active" data-model="opus" onclick="selectModel('opus')">Opus</button>
             </div>
             <div class="extras-divider"></div>
+            <div class="extras-label">Permission</div>
+            <div class="extras-models">
+              <button class="mode-btn active" data-mode="auto" onclick="selectMode('auto')" title="Full autonomy — nothing is asked">Auto</button>
+              <button class="mode-btn" data-mode="acceptEdits" onclick="selectMode('acceptEdits')" title="Edits auto-apply; other tools ask first">Edits</button>
+              <button class="mode-btn" data-mode="plan" onclick="selectMode('plan')" title="Read-only — returns a plan, makes no changes">Plan</button>
+            </div>
+            <div class="extras-divider"></div>
             <button class="extras-chip" onclick="fillChip('Fix the last error')">Fix last error</button>
             <button class="extras-chip" onclick="fillChip('Add tests for the code you just wrote')">Add tests</button>
             <button class="extras-chip" onclick="fillChip('Explain what you just did')">Explain</button>
@@ -386,6 +396,7 @@
   <div class="statusbar">
     <span class="sb-seg">⑂ feature/assembly-orchestrator</span>
     <span class="sb-seg">✳ <span id="sb-model">opus</span></span>
+    <span class="sb-seg">🔓 <span id="sb-mode">auto</span></span>
     <span class="sb-right">
       <span class="sb-seg" id="sb-agent">default</span>
       <span class="sb-seg">UTF-8</span>
@@ -524,6 +535,18 @@ function selectModel(m) {
   _model = m;
   document.querySelectorAll('.model-btn').forEach(b => b.classList.toggle('active', b.dataset.model === m));
   telemetry('model_changed', { from: prev, to: m });
+}
+
+// Permission mode for the next task: auto | acceptEdits | plan.
+const _MODE_LABELS = { auto: 'auto', acceptEdits: 'accept edits', plan: 'plan' };
+let _mode = 'auto';
+function selectMode(m) {
+  const prev = _mode;
+  _mode = m;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+  const seg = document.getElementById('sb-mode');
+  if (seg) seg.textContent = _MODE_LABELS[m] || m;
+  telemetry('mode_changed', { from: prev, to: m });
 }
 
 // ── Rate-limit state ────────────────────────────────────────────────────────
@@ -812,6 +835,9 @@ async function readSSE(resp, onEvent) {
 
 // ── Send prompt ───────────────────────────────────────────────────────────────
 async function sendPrompt() {
+  // Plan mode routes through the richer plan overlay (refine / accept) flow.
+  if (_mode === 'plan') return planPrompt();
+
   const textarea = document.getElementById('prompt');
   const prompt = textarea.value.trim();
   if (!prompt) return;
@@ -836,7 +862,7 @@ async function sendPrompt() {
     const resp = await apiFetch('/task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, agent_id: _agentId, model: _model }),
+      body: JSON.stringify({ prompt, agent_id: _agentId, model: _model, mode: _mode }),
       signal: stream.controller.signal,
     });
 

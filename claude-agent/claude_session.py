@@ -94,6 +94,17 @@ _MODELS: dict[str, str] = {
     "opus":   "claude-opus-4-6",
 }
 
+# UI permission modes → the CLI's --permission-mode value.
+#   auto        — full autonomy, nothing is asked (the historical behaviour)
+#   acceptEdits — file edits auto-apply; other tools (Bash…) ask for approval
+#   plan        — read-only; Claude returns a plan and makes no changes
+_PERMISSION_MODES: dict[str, str] = {
+    "auto":        "bypassPermissions",
+    "acceptEdits": "acceptEdits",
+    "plan":        "plan",
+}
+_DEFAULT_MODE = "auto"
+
 
 def get_history(agent_id: str) -> list[dict]:
     return _conversation_history.get(agent_id, [])
@@ -203,7 +214,7 @@ def _summarise_tool(name: str, inp: dict) -> str:
 
 # ── Main streaming function ───────────────────────────────────────────────────
 
-async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet", plan_mode: bool = False) -> AsyncIterator[dict]:
+async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet", mode: str = _DEFAULT_MODE) -> AsyncIterator[dict]:
     """
     Run Claude Code non-interactively and yield UI-ready events:
 
@@ -213,13 +224,18 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
       {"type": "error", "message": str}
 
     Conversation history is maintained automatically via --resume <session_id>.
-    plan_mode=True adds --plan flag and skips session persistence.
+
+    `mode` is one of _PERMISSION_MODES ("auto", "acceptEdits", "plan"); it maps
+    to the CLI's --permission-mode. "plan" is read-only and skips session
+    persistence so a planning turn never pollutes the conversation.
 
     Tasks that target the same agent_id are serialised via a per-agent lock so
     concurrent requests cannot corrupt session state.
     """
+    if mode not in _PERMISSION_MODES:
+        mode = _DEFAULT_MODE
     async with _get_agent_lock(agent_id):
-        inner = _stream_task_impl(prompt, agent_id, model, plan_mode)
+        inner = _stream_task_impl(prompt, agent_id, model, mode)
         try:
             async for event in inner:
                 yield event
@@ -229,7 +245,8 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
             await inner.aclose()
 
 
-async def _stream_task_impl(prompt: str, agent_id: str, model: str, plan_mode: bool) -> AsyncIterator[dict]:
+async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str) -> AsyncIterator[dict]:
+    plan_mode = mode == "plan"
     session_id = None if plan_mode else _agent_sessions.get(agent_id)
     is_resume = session_id is not None
     task_start_ms = _now_ms()
@@ -240,7 +257,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, plan_mode: b
         "claude", "--print",
         "--output-format", "stream-json",
         "--verbose",
-        "--dangerously-skip-permissions",
+        "--permission-mode", _PERMISSION_MODES.get(mode, "bypassPermissions"),
         "--model", model_id,
         "--system-prompt", _SYSTEM_PROMPT,
     ]

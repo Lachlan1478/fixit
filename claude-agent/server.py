@@ -87,7 +87,8 @@ class TaskRequest(BaseModel):
     prompt: str
     agent_id: str = "default"
     model: str = "opus"  # haiku | sonnet | opus
-    plan_mode: bool = False
+    mode: str = "auto"   # auto | acceptEdits | plan
+    plan_mode: bool = False  # legacy alias; when true, forces mode="plan"
 
 
 class ResetMemoryRequest(BaseModel):
@@ -101,13 +102,14 @@ async def run_task(request: TaskRequest):
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     agent_id = request.agent_id.strip() or "default"
+    mode = "plan" if request.plan_mode else request.mode
 
     async def event_stream():
         t0 = time.monotonic()
         event_count = 0
-        logger.info("Request | agent=%s prompt=%r", agent_id, request.prompt[:60])
+        logger.info("Request | agent=%s mode=%s prompt=%r", agent_id, mode, request.prompt[:60])
         try:
-            async for event in cs.stream_task(request.prompt, agent_id, request.model, request.plan_mode):
+            async for event in cs.stream_task(request.prompt, agent_id, request.model, mode):
                 event_count += 1
                 if event.get("type") == "rate_limited":
                     reset_at_str = event.get("reset_at")
