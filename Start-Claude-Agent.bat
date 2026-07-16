@@ -3,6 +3,9 @@ setlocal
 title Claude Agent - phone server
 cd /d "%~dp0"
 
+REM UTF-8 console so the scan-to-connect QR code renders as solid blocks.
+chcp 65001 >nul
+
 REM ============================================================
 REM  One-click launcher for the Claude Agent phone UI.
 REM  Double-click, then open one of the printed URLs on your
@@ -37,18 +40,31 @@ REM --- Tailscale IPv4 (for use away from home) ----------------
 set "TSIP="
 for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "$i=Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -like '*Tailscale*' | Select-Object -First 1 -ExpandProperty IPAddress; if($i){$i}"`) do set "TSIP=%%i"
 
+REM --- Scan-to-connect: token baked into the URL so no typing ------
+REM Prefer Tailscale (works at home AND away); fall back to Wi-Fi.
+set "PRIMARYIP=%WIFIIP%"
+if defined TSIP set "PRIMARYIP=%TSIP%"
+set "MAGICURL=http://%PRIMARYIP%:8007/?token=%AGENT_API_KEY%"
+
 echo.
 echo ============================================================
 echo   Claude Agent is starting...
 echo.
-echo   On the same Wi-Fi:      http://%WIFIIP%:8007
+echo   SCAN THIS WITH YOUR PHONE CAMERA TO CONNECT:
+echo.
+python "%~dp0claude-agent\qr.py" "%MAGICURL%"
+echo.
+echo   ...or tap one of these links on your phone (auto sign-in):
+echo.
 if defined TSIP (
-  echo   Anywhere ^(Tailscale^):   http://%TSIP%:8007
-) else (
-  echo   Anywhere ^(Tailscale^):   not detected - start Tailscale to enable
+  echo   Anywhere ^(Tailscale^):  http://%TSIP%:8007/?token=%AGENT_API_KEY%
+)
+echo   On the same Wi-Fi:     http://%WIFIIP%:8007/?token=%AGENT_API_KEY%
+if not defined TSIP (
+  echo   Anywhere ^(Tailscale^):  not detected - start Tailscale to use away from home
 )
 echo.
-echo   Access token ^(your phone asks for this once^):
+echo   (If asked to sign in manually, the access token is:)
 echo        %AGENT_API_KEY%
 echo.
 echo   Keep this window open. Press Ctrl+C to stop the server.

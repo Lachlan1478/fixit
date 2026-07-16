@@ -399,6 +399,21 @@ const _sessionKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
   : Math.random().toString(36).slice(2);
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
+// Accept a token from the URL (?token=…) so a scanned/tapped link logs the
+// phone in with no typing; store it, then scrub it from the visible address.
+(function () {
+  try {
+    const params = new URLSearchParams(location.search);
+    const t = params.get('token');
+    if (t && t.trim()) {
+      localStorage.setItem('agent_token', t.trim());
+      params.delete('token');
+      const q = params.toString();
+      history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
+    }
+  } catch (_) {}
+})();
+
 function authHeaders() {
   try {
     const token = localStorage.getItem('agent_token');
