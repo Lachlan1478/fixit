@@ -20,7 +20,10 @@ import claude_session as cs
 import rate_limit as rl
 from notifications import send_notification
 
-WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Browsable/containment root for the file Explorer and file endpoints.
+# Defaults to the repo root (parent of claude-agent); override with AGENT_WORKSPACE
+# to expose a wider tree (e.g. the whole code directory).
+WORKSPACE_ROOT = os.path.abspath(os.environ.get("AGENT_WORKSPACE") or os.path.join(os.path.dirname(__file__), ".."))
 from tools.filesystem import read_file as _read_file
 from tools.git import git_diff as _git_diff, git_status as _git_status
 
@@ -86,7 +89,7 @@ async def root():
 class TaskRequest(BaseModel):
     prompt: str
     agent_id: str = "default"
-    model: str = "opus"  # haiku | sonnet | opus
+    model: str = "opus"  # haiku | sonnet | opus | fable
     mode: str = "auto"   # auto | acceptEdits | plan
     plan_mode: bool = False  # legacy alias; when true, forces mode="plan"
 

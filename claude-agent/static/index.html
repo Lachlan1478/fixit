@@ -218,6 +218,11 @@
     .agent-tab.active { background: var(--sel); color: #fff; border-color: var(--accent); }
     .tab-add { background: none; color: #999; border: 1px dashed var(--border-hi); border-radius: 3px; padding: 3px 9px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
     .proj-head { padding: 6px 8px 4px 12px; font-size: 11px; font-weight: 700; letter-spacing: .05em; color: #cfcfcf; text-transform: uppercase; }
+    .explorer-search-wrap { padding: 0 10px 6px; }
+    .explorer-search { width: 100%; box-sizing: border-box; background: var(--bg); color: #ddd; border: 1px solid var(--border-hi); border-radius: 3px; padding: 5px 8px; font-family: var(--mono); font-size: 12px; outline: none; }
+    .explorer-search:focus { border-color: var(--accent); }
+    .explorer-search::placeholder { color: var(--muted); }
+    .exp-path { flex-shrink: 1; min-width: 0; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 10px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: right; }
     .explorer-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 0 12px 6px; font-family: var(--mono); font-size: 11px; }
     .bc-seg { background: none; border: none; padding: 0; font: inherit; font-family: var(--mono); color: var(--t-blue); cursor: pointer; }
     .bc-sep { color: var(--muted); }
@@ -301,10 +306,7 @@
     <!-- Activity bar -->
     <div class="activitybar">
       <button class="act active" id="act-explorer" onclick="openDrawer()" aria-label="Explorer">🗂</button>
-      <button class="act" onclick="openDrawer()" aria-label="Search">🔍</button>
-      <button class="act" aria-label="Source Control">⑂</button>
-      <button class="act" aria-label="Run">▷</button>
-      <button class="act" aria-label="Claude">✳</button>
+      <button class="act" onclick="openSearch()" aria-label="Search">🔍</button>
     </div>
 
     <!-- Editor + terminal -->
@@ -356,6 +358,7 @@
               <button class="model-btn" data-model="haiku" onclick="selectModel('haiku')">Haiku</button>
               <button class="model-btn" data-model="sonnet" onclick="selectModel('sonnet')">Sonnet</button>
               <button class="model-btn active" data-model="opus" onclick="selectModel('opus')">Opus</button>
+              <button class="model-btn" data-model="fable" onclick="selectModel('fable')">Fable</button>
             </div>
             <div class="extras-divider"></div>
             <div class="extras-label">Permission</div>
@@ -387,6 +390,11 @@
         <button class="tab-add" onclick="addAgentTab()" title="New agent" aria-label="New agent">+</button>
       </div>
       <div class="proj-head">CLAUDE_PHONE</div>
+      <div class="explorer-search-wrap">
+        <input id="explorer-search" class="explorer-search" type="search" inputmode="search"
+               placeholder="Search files…" autocomplete="off" autocapitalize="off" spellcheck="false"
+               oninput="onSearchInput(event)" onkeydown="if(event.key==='Escape')clearSearch()" aria-label="Search files">
+      </div>
       <div class="explorer-breadcrumb" id="explorer-breadcrumb"></div>
       <div class="explorer-list" id="explorer-list"><div class="expl-loading">Loading…</div></div>
     </aside>
@@ -1187,13 +1195,118 @@ function navigateExplorer(path) {
   }
 }
 
+// ── File search ───────────────────────────────────────────────────────────
+// Search filters the whole workspace by filename. The tree is fetched once from
+// /tree and cached; scheduleTreeRefresh() invalidates it when files change.
+let _treeCache = null;
+let _searchTimer = null;
+const _SEARCH_LIMIT = 250;
+
+// Open the drawer and focus the search box (the 🔍 activity-bar button).
+function openSearch() {
+  openDrawer();
+  const inp = document.getElementById('explorer-search');
+  if (inp) { inp.focus(); inp.select(); }
+}
+
+// Flatten the nested /tree response into a list of {name, path, type}.
+async function _searchIndex() {
+  if (_treeCache) return _treeCache;
+  const root = await apiFetch('/tree?depth=6').then(r => r.json());
+  const out = [];
+  (function walk(node) {
+    for (const c of (node.children || [])) {
+      out.push({ name: c.name, path: c.path, type: c.type });
+      if (c.type === 'dir') walk(c);
+    }
+  })(root);
+  _treeCache = out;
+  return out;
+}
+
+function onSearchInput(e) {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => runSearch(e.target.value), 200);
+}
+
+function clearSearch() {
+  const inp = document.getElementById('explorer-search');
+  if (inp) inp.value = '';
+  runSearch('');
+}
+
+async function runSearch(raw) {
+  const q = (raw || '').trim().toLowerCase();
+  const listEl = document.getElementById('explorer-list');
+  const bcEl   = document.getElementById('explorer-breadcrumb');
+  // Empty query → restore the normal directory listing.
+  if (!q) {
+    if (bcEl) bcEl.style.display = '';
+    loadExplorer(_explorerCwd);
+    return;
+  }
+  if (bcEl) bcEl.style.display = 'none';
+  listEl.innerHTML = '<div class="expl-loading">Searching…</div>';
+  let entries;
+  try {
+    entries = await _searchIndex();
+  } catch (err) {
+    listEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:6px 14px">Error: ${escHtml(err.message)}</div>`;
+    return;
+  }
+  const matches = entries
+    .filter(x => x.name.toLowerCase().includes(q))
+    .sort((a, b) => (a.type === b.type ? a.path.length - b.path.length : a.type === 'dir' ? -1 : 1));
+  const shown = matches.slice(0, _SEARCH_LIMIT);
+
+  listEl.textContent = '';
+  if (!shown.length) {
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:6px 14px">No matches</div>';
+    return;
+  }
+  telemetry('files_searched', { q, results: matches.length });
+  for (const m of shown) {
+    const parent = m.path.includes('/') ? m.path.slice(0, m.path.lastIndexOf('/')) : '';
+    if (m.type === 'dir') {
+      listEl.appendChild(_searchRow('📁', m.name, 'dir', parent, () => { clearSearch(); navigateExplorer(m.path); }));
+    } else {
+      listEl.appendChild(_searchRow(_fileIcon(m.name), m.name, 'file', parent, () => openFile(m.path, m.name)));
+    }
+  }
+  if (matches.length > shown.length) {
+    const more = document.createElement('div');
+    more.style.cssText = 'color:var(--muted);font-size:11px;padding:8px 14px';
+    more.textContent = `+${matches.length - shown.length} more — refine your search`;
+    listEl.appendChild(more);
+  }
+}
+
+// A search result row: icon + name, with the containing folder shown dimmed on the right.
+function _searchRow(icon, name, kind, parent, onClick) {
+  const btn = _expRow(icon, name, kind, '', onClick);
+  if (parent) {
+    const pathEl = document.createElement('span');
+    pathEl.className = 'exp-path';
+    pathEl.textContent = parent;
+    pathEl.title = parent;
+    btn.appendChild(pathEl);
+  }
+  return btn;
+}
+
 // Debounced background refresh after file-writing tools. Runs even when the
 // Files view is hidden so the listing is fresh the moment the tab is opened;
 // coalesces rapid successive writes into a single fetch.
 function scheduleTreeRefresh(path) {
   _explorerCwd = path || '';
+  _treeCache = null;  // files changed — invalidate the search index
   clearTimeout(_treeRefreshTimer);
-  _treeRefreshTimer = setTimeout(() => loadExplorer(_explorerCwd), 1500);
+  _treeRefreshTimer = setTimeout(() => {
+    loadExplorer(_explorerCwd);
+    // If a search is active, re-run it against the refreshed tree.
+    const inp = document.getElementById('explorer-search');
+    if (inp && inp.value.trim()) runSearch(inp.value);
+  }, 1500);
 }
 
 async function loadExplorer(path) {

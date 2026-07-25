@@ -26,7 +26,12 @@ import rate_limit as rl
 
 logger = logging.getLogger(__name__)
 
-WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Browsable/containment root (kept in sync with server.py); override with AGENT_WORKSPACE.
+WORKSPACE_ROOT = os.path.abspath(os.environ.get("AGENT_WORKSPACE") or os.path.join(os.path.dirname(__file__), ".."))
+# Where the claude CLI actually runs (its cwd + advertised project root).
+# Defaults to the browsable root; override with AGENT_HOME to anchor Claude in a
+# subdirectory while still allowing the Explorer to browse the wider workspace.
+SESSION_CWD = os.path.abspath(os.environ.get("AGENT_HOME") or WORKSPACE_ROOT)
 LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
 
 # Seconds of stdout silence before the subprocess is considered hung
@@ -80,7 +85,7 @@ If playwright isn't installed, install it first:
 
 ## Workspace
 
-- Your current working directory IS the project root: {WORKSPACE_ROOT}
+- Your current working directory IS the project root: {SESSION_CWD}
 - Write files using paths relative to that directory (e.g. claude-agent/static/result.html), \
 or absolute paths that start with the exact root above.
 - Never write to a similarly-named sibling directory. Files written outside this root do NOT \
@@ -92,6 +97,7 @@ _MODELS: dict[str, str] = {
     "haiku":  "claude-haiku-4-5-20251001",
     "sonnet": "claude-sonnet-4-6",
     "opus":   "claude-opus-4-6",
+    "fable":  "claude-fable-5",
 }
 
 # UI permission modes → the CLI's --permission-mode value.
@@ -315,7 +321,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str) -
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=WORKSPACE_ROOT,
+            cwd=SESSION_CWD,
             limit=10 * 1024 * 1024,  # 10 MB — Claude's stream-json lines can exceed the 64 KB default
         )
     except FileNotFoundError:
