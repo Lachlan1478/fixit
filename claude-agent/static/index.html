@@ -245,6 +245,14 @@
     .fo-close { background: #333; color: #ddd; border: 1px solid var(--border-hi); border-radius: 4px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
     .fo-content { flex: 1; overflow: auto; background: var(--editor); border: 1px solid var(--border); border-radius: 4px; padding: 12px; }
     .fo-content pre { font-family: var(--mono); font-size: 12px; color: #d4d4d4; white-space: pre-wrap; word-break: break-all; line-height: 1.55; }
+    #sessions-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50; padding: 14px; }
+    #sessions-overlay.open { display: flex; flex-direction: column; }
+    .sessions-list { flex: 1; overflow: auto; background: var(--editor); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
+    .sess-row { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; background: none; border: none; border-bottom: 1px solid var(--border); padding: 11px 10px; cursor: pointer; color: #ddd; }
+    .sess-row:active { background: var(--sel-hover); }
+    .sess-title { font-size: 13.5px; color: #eee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sess-meta { font-family: var(--mono); font-size: 10.5px; color: var(--muted); display: flex; gap: 8px; }
+    .sess-empty { color: var(--muted); font-size: 12.5px; font-family: var(--mono); padding: 10px; }
     #img-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 60; align-items: center; justify-content: center; padding: 20px; cursor: zoom-out; }
     #img-overlay.open { display: flex; }
     #img-overlay img { max-width: 100%; max-height: 100%; }
@@ -273,6 +281,14 @@
     <button class="fo-close" onclick="closeFileOverlay()">✕ Close</button>
   </div>
   <div class="fo-content"><pre id="fo-content"></pre></div>
+</div>
+
+<div id="sessions-overlay" role="dialog" aria-modal="true" aria-label="Previous chats">
+  <div class="fo-header">
+    <div class="fo-path">Previous chats</div>
+    <button class="fo-close" onclick="closeSessions()">✕ Close</button>
+  </div>
+  <div class="sessions-list" id="sessions-list"></div>
 </div>
 <div id="img-overlay" onclick="closeImageOverlay()" role="dialog" aria-modal="true" aria-label="Image preview"><img id="img-overlay-src" src="" alt=""></div>
 <div id="plan-overlay" role="dialog" aria-modal="true" aria-label="Plan">
@@ -307,6 +323,7 @@
     <div class="activitybar">
       <button class="act active" id="act-explorer" onclick="openDrawer()" aria-label="Explorer">🗂</button>
       <button class="act" onclick="openSearch()" aria-label="Search">🔍</button>
+      <button class="act" onclick="openSessions()" aria-label="Previous chats">🕘</button>
     </div>
 
     <!-- Editor + terminal -->
@@ -1415,6 +1432,92 @@ function closeFileOverlay() {
   document.getElementById('file-overlay').classList.remove('open');
 }
 
+// ── Previous chats (picker) ─────────────────────────────────────────────────
+// Absolute-ish timestamp for the chat list: "Today 14:30", "Aug 4", etc.
+function fmtWhen(iso) {
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return 'Today ' + time;
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return 'Yesterday ' + time;
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+  } catch { return ''; }
+}
+
+async function openSessions() {
+  const overlay = document.getElementById('sessions-overlay');
+  const list = document.getElementById('sessions-list');
+  list.innerHTML = '<div class="sess-empty">Loading…</div>';
+  overlay.classList.add('open');
+  telemetry('sessions_opened', {});
+  try {
+    const data = await apiFetch('/sessions').then(r => r.json());
+    renderSessions(data.sessions || []);
+  } catch (err) {
+    list.innerHTML = `<div class="sess-empty">Error: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function closeSessions() {
+  document.getElementById('sessions-overlay').classList.remove('open');
+}
+
+function renderSessions(sessions) {
+  const list = document.getElementById('sessions-list');
+  list.textContent = '';
+  if (!sessions.length) {
+    list.innerHTML = '<div class="sess-empty">No previous chats yet.</div>';
+    return;
+  }
+  for (const s of sessions) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'sess-row';
+
+    const title = document.createElement('div');
+    title.className = 'sess-title';
+    title.textContent = s.title || '(no prompt)';
+    row.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'sess-meta';
+    const when = document.createElement('span');
+    when.textContent = fmtWhen(s.last_ts);
+    const info = document.createElement('span');
+    const msgs = Math.ceil((s.turn_count || 0) / 2);
+    info.textContent = `${msgs} msg${msgs === 1 ? '' : 's'} · ${s.agent_id}`;
+    meta.appendChild(when);
+    meta.appendChild(info);
+    row.appendChild(meta);
+
+    row.addEventListener('click', () => openPastChat(s));
+    list.appendChild(row);
+  }
+}
+
+// Reopen a past chat in the current tab: restore its transcript and make it the
+// --resume target so the next prompt continues it.
+async function openPastChat(s) {
+  try {
+    const data = await apiFetch('/sessions/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: s.session_id, agent_id: _agentId }),
+    }).then(r => r.json());
+    clearFeed();                 // drop any live feed from the current tab…
+    _clearedAtIndex = 0;         // …but show the whole restored thread
+    renderHistory(data.history || []);
+    closeSessions();
+    const term = document.getElementById('terminal');
+    if (term) term.scrollTop = 0;
+    telemetry('past_chat_opened', { session_id: s.session_id, agent_id: _agentId });
+  } catch (err) {
+    alert('Could not open chat: ' + err.message);
+  }
+}
+
 
 // Enter = submit, Shift+Enter = newline
 document.getElementById('prompt').addEventListener('keydown', e => {
@@ -1424,6 +1527,9 @@ document.getElementById('prompt').addEventListener('keydown', e => {
 // Close file overlay on background click
 document.getElementById('file-overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeFileOverlay();
+});
+document.getElementById('sessions-overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeSessions();
 });
 
 // Close options dropdown on outside click

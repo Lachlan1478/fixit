@@ -122,6 +122,113 @@ def get_history(agent_id: str) -> list[dict]:
     return _conversation_history.get(agent_id, [])
 
 
+# ── Previous chats (persistence + resume) ──────────────────────────────────────
+# The in-memory maps above are wiped on restart. sessions.jsonl, however, records
+# every completed task (agent_id, session_id, is_resume, prompt, result, ts). We
+# reconstruct past conversations from it so tabs can auto-restore on startup and
+# the UI can list/reopen ("--resume") any prior chat.
+
+def _reconstruct_conversations() -> list[dict]:
+    """Rebuild conversation threads from sessions.jsonl, in start order.
+
+    A new thread begins whenever a task ran without --resume (is_resume False);
+    subsequent resumed tasks extend it. Each thread carries its running turn list
+    and the latest session_id, which is the value to --resume it from.
+    """
+    path = os.path.join(LOGS_DIR, "sessions.jsonl")
+    if not os.path.exists(path):
+        return []
+    current: dict[str, dict] = {}   # agent_id → thread being extended
+    threads: list[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                agent_id = e.get("agent_id") or "default"
+                sid = e.get("session_id")
+                prompt = (e.get("prompt") or "").strip()
+                result = e.get("result") or ""
+                ts = e.get("ts")
+                thread = current.get(agent_id)
+                if thread is None or not e.get("is_resume"):
+                    first_line = prompt.splitlines()[0] if prompt else "(no prompt)"
+                    thread = {
+                        "agent_id": agent_id,
+                        "session_id": sid,
+                        "title": first_line[:80],
+                        "started_ts": ts,
+                        "last_ts": ts,
+                        "turns": [],
+                    }
+                    current[agent_id] = thread
+                    threads.append(thread)
+                thread["turns"].append({"role": "user", "content": prompt, "ts": ts})
+                if result:
+                    thread["turns"].append({"role": "assistant", "content": result, "ts": ts})
+                if sid:
+                    thread["session_id"] = sid
+                thread["last_ts"] = ts
+    except OSError as exc:
+        logger.error("could not read sessions.jsonl: %s", exc)
+        return []
+    return threads
+
+
+def list_conversations() -> list[dict]:
+    """Metadata for every past chat, newest activity first (for the picker)."""
+    items = [
+        {
+            "session_id": t["session_id"],
+            "agent_id": t["agent_id"],
+            "title": t["title"],
+            "started_ts": t["started_ts"],
+            "last_ts": t["last_ts"],
+            "turn_count": len(t["turns"]),
+        }
+        for t in _reconstruct_conversations()
+        if t["session_id"]
+    ]
+    items.sort(key=lambda x: x["last_ts"] or "", reverse=True)
+    return items
+
+
+def open_conversation(agent_id: str, session_id: str) -> list[dict] | None:
+    """Point an agent tab at a past chat: set its --resume target and restore its
+    turns. Returns the turn list, or None if the session_id is unknown."""
+    for t in _reconstruct_conversations():
+        if t["session_id"] == session_id:
+            _agent_sessions[agent_id] = session_id
+            _conversation_history[agent_id] = list(t["turns"])
+            logger.info("Opened past chat | agent=%s session=%s turns=%d",
+                        agent_id, session_id, len(t["turns"]))
+            return t["turns"]
+    return None
+
+
+def hydrate_state() -> None:
+    """On startup, restore each agent's most recent chat (session_id + turns) so
+    conversations survive a server restart."""
+    latest: dict[str, dict] = {}
+    for t in _reconstruct_conversations():
+        if not t["session_id"]:
+            continue
+        prev = latest.get(t["agent_id"])
+        if prev is None or (t["last_ts"] or "") >= (prev["last_ts"] or ""):
+            latest[t["agent_id"]] = t
+    for agent_id, t in latest.items():
+        _agent_sessions[agent_id] = t["session_id"]
+        _conversation_history[agent_id] = list(t["turns"])
+    if latest:
+        logger.info("Hydrated %d agent conversation(s) from disk: %s",
+                    len(latest), ", ".join(sorted(latest)))
+
+
 def _get_agent_lock(agent_id: str) -> asyncio.Lock:
     """Return the (lazily created) lock that serialises tasks for one agent."""
     lock = _agent_locks.get(agent_id)

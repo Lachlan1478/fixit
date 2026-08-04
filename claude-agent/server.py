@@ -37,6 +37,7 @@ _LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     analytics.init_db(_LOGS_DIR)
+    cs.hydrate_state()  # restore each agent's latest chat from disk (survives restarts)
     if not os.environ.get("AGENT_API_KEY"):
         logger.warning(
             "AGENT_API_KEY is not set — API endpoints are unauthenticated "
@@ -155,6 +156,27 @@ async def rate_limit_status():
 @app.get("/history/{agent_id}", dependencies=_PROTECTED)
 async def get_history(agent_id: str):
     return {"history": cs.get_history(agent_id)}
+
+
+@app.get("/sessions", dependencies=_PROTECTED)
+async def list_sessions():
+    """Past chats (from sessions.jsonl), newest first — powers the picker."""
+    return {"sessions": await asyncio.to_thread(cs.list_conversations)}
+
+
+class OpenSessionRequest(BaseModel):
+    session_id: str
+    agent_id: str = "default"
+
+
+@app.post("/sessions/open", dependencies=_PROTECTED)
+async def open_session(req: OpenSessionRequest):
+    """Reopen a past chat in an agent tab: restore its turns and set it as the
+    --resume target so the next prompt continues it."""
+    turns = await asyncio.to_thread(cs.open_conversation, req.agent_id, req.session_id)
+    if turns is None:
+        raise HTTPException(status_code=404, detail="Unknown session_id")
+    return {"history": turns}
 
 
 _TREE_SKIP = {
