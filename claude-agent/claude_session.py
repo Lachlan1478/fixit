@@ -43,11 +43,19 @@ _STDERR_CHUNK_SIZE = 64 * 1024
 # Maps agent_id → Claude Code session_id for --resume
 _agent_sessions: dict[str, str] = {}
 
+# Maps agent_id → the cwd its current session was created in. The CLI stores
+# sessions per project directory, so a session can only be resumed from the
+# same cwd; a different cwd starts a fresh conversation.
+_agent_session_cwd: dict[str, str] = {}
+
 # Conversation history per agent_id
 _conversation_history: dict[str, list[dict]] = {}
 
 # Per-agent locks: serialise concurrent tasks that target the same agent_id
 _agent_locks: dict[str, asyncio.Lock] = {}
+
+# Detached task pumps, referenced so the event loop never garbage-collects them
+_background_tasks: set[asyncio.Task] = set()
 
 # Image extensions that trigger an inline image event in the UI
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
@@ -104,7 +112,7 @@ _MODELS: dict[str, str] = {
     "haiku":  "claude-haiku-4-5-20251001",
     "sonnet": "claude-sonnet-4-6",
     "opus":   "claude-opus-4-6",
-    "fable":  "claude-fable-5",
+    "fable":  "claude-fable-5-1",
 }
 
 # UI permission modes → the CLI's --permission-mode value.
@@ -159,6 +167,7 @@ def _reconstruct_conversations() -> list[dict]:
                     continue
                 agent_id = e.get("agent_id") or "default"
                 sid = e.get("session_id")
+                cwd = e.get("cwd") or SESSION_CWD
                 prompt = (e.get("prompt") or "").strip()
                 result = e.get("result") or ""
                 ts = e.get("ts")
@@ -171,6 +180,7 @@ def _reconstruct_conversations() -> list[dict]:
                         "title": first_line[:80],
                         "started_ts": ts,
                         "last_ts": ts,
+                        "cwd": cwd,
                         "turns": [],
                     }
                     current[agent_id] = thread
@@ -180,6 +190,7 @@ def _reconstruct_conversations() -> list[dict]:
                     thread["turns"].append({"role": "assistant", "content": result, "ts": ts})
                 if sid:
                     thread["session_id"] = sid
+                    thread["cwd"] = cwd
                 thread["last_ts"] = ts
     except OSError as exc:
         logger.error("could not read sessions.jsonl: %s", exc)
@@ -196,6 +207,7 @@ def list_conversations() -> list[dict]:
             "title": t["title"],
             "started_ts": t["started_ts"],
             "last_ts": t["last_ts"],
+            "cwd": t["cwd"],
             "turn_count": len(t["turns"]),
         }
         for t in _reconstruct_conversations()
@@ -211,6 +223,7 @@ def open_conversation(agent_id: str, session_id: str) -> list[dict] | None:
     for t in _reconstruct_conversations():
         if t["session_id"] == session_id:
             _agent_sessions[agent_id] = session_id
+            _agent_session_cwd[agent_id] = t["cwd"]
             _conversation_history[agent_id] = list(t["turns"])
             logger.info("Opened past chat | agent=%s session=%s turns=%d",
                         agent_id, session_id, len(t["turns"]))
@@ -230,6 +243,7 @@ def hydrate_state() -> None:
             latest[t["agent_id"]] = t
     for agent_id, t in latest.items():
         _agent_sessions[agent_id] = t["session_id"]
+        _agent_session_cwd[agent_id] = t["cwd"]
         _conversation_history[agent_id] = list(t["turns"])
     if latest:
         logger.info("Hydrated %d agent conversation(s) from disk: %s",
@@ -363,20 +377,38 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
     """
     if mode not in _PERMISSION_MODES:
         mode = _DEFAULT_MODE
-    async with _get_agent_lock(agent_id):
-        inner = _stream_task_impl(prompt, agent_id, model, mode, cwd or SESSION_CWD)
-        try:
-            async for event in inner:
-                yield event
-        finally:
-            # Guarantee inner cleanup (subprocess kill) runs even if the SSE
-            # client disconnects (GeneratorExit) mid-stream.
-            await inner.aclose()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def pump() -> None:
+        # Runs to completion even if the SSE consumer disconnects (e.g. the web
+        # app redeploys itself mid-task), so Claude finishes and the turn is
+        # recorded; the UI reloads history afterwards.
+        async with _get_agent_lock(agent_id):
+            try:
+                async for event in _stream_task_impl(prompt, agent_id, model, mode, cwd or SESSION_CWD):
+                    queue.put_nowait(event)
+            except Exception as exc:
+                logger.exception("stream_task pump failed")
+                queue.put_nowait({"type": "error", "message": str(exc)})
+            finally:
+                queue.put_nowait(None)
+
+    task = asyncio.create_task(pump())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    while True:
+        event = await queue.get()
+        if event is None:
+            return
+        yield event
 
 
 async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, cwd: str) -> AsyncIterator[dict]:
     plan_mode = mode == "plan"
     session_id = None if plan_mode else _agent_sessions.get(agent_id)
+    if session_id and _agent_session_cwd.get(agent_id, SESSION_CWD) != cwd:
+        logger.info("Agent %s moved to %s — starting a fresh session", agent_id, cwd)
+        session_id = None
     is_resume = session_id is not None
     task_start_ms = _now_ms()
     task_start_ts = _now_iso()
@@ -523,6 +555,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                 new_sid = event["session_id"]
                 if new_sid != session_id:
                     _agent_sessions[agent_id] = new_sid
+                    _agent_session_cwd[agent_id] = cwd
                     session_id = new_sid
 
             # ── system init ──────────────────────────────────────────────
@@ -757,7 +790,11 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                     "message": stderr_text or "Claude usage limit reached",
                 }
             else:
-                err_msg = f"Claude exited with code {exit_code}: {stderr_text[:200]}"
+                if "No conversation found" in stderr_text:
+                    _agent_sessions.pop(agent_id, None)
+                    _agent_session_cwd.pop(agent_id, None)
+                    stderr_text += " — the saved session is gone; the next prompt starts a fresh one"
+                err_msg = f"Claude exited with code {exit_code}: {stderr_text[:260]}"
                 logger.error(err_msg)
                 yield {"type": "error", "message": err_msg}
 
@@ -767,6 +804,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
             "agent_id": agent_id,
             "session_id": session_id,
             "is_resume": is_resume,
+            "cwd": cwd,
             "prompt": prompt,
             "prompt_len": len(prompt),
             # Timing
@@ -833,6 +871,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
 def reset_session(agent_id: str) -> None:
     """Clear stored session_id and conversation history for a fresh start."""
     _agent_sessions.pop(agent_id, None)
+    _agent_session_cwd.pop(agent_id, None)
     _conversation_history.pop(agent_id, None)
     logger.info("Session reset for agent_id=%r", agent_id)
     _write_jsonl("events.jsonl", {

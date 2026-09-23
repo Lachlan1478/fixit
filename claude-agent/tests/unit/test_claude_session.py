@@ -182,3 +182,58 @@ def test_system_prompt_pins_absolute_workspace_root():
     assert cs.WORKSPACE_ROOT in cs._SYSTEM_PROMPT
     # No unrendered f-string placeholders left behind.
     assert "{" not in cs._SYSTEM_PROMPT and "}" not in cs._SYSTEM_PROMPT
+
+
+def test_resume_is_dropped_when_cwd_changes(monkeypatch):
+    """A session created in one folder is never resumed from another (the CLI
+    keys sessions by project directory)."""
+    import asyncio
+
+    cs._agent_sessions["cwd-test"] = "sid-1"
+    cs._agent_session_cwd["cwd-test"] = "/tmp/folder-a"
+    captured = {}
+
+    async def fake_exec(*argv, **kwargs):
+        captured["argv"] = argv
+        raise FileNotFoundError  # stop before a real spawn
+
+    monkeypatch.setattr(cs.asyncio, "create_subprocess_exec", fake_exec)
+
+    async def run():
+        return [e async for e in cs._stream_task_impl("hi", "cwd-test", "haiku", "auto", "/tmp/folder-b")]
+
+    asyncio.run(run())
+    assert "--resume" not in captured["argv"]
+    assert "/tmp/folder-b" in " ".join(captured["argv"])
+
+    async def run_same():
+        return [e async for e in cs._stream_task_impl("hi", "cwd-test", "haiku", "auto", "/tmp/folder-a")]
+
+    asyncio.run(run_same())
+    assert "--resume" in captured["argv"] and "sid-1" in captured["argv"]
+    cs.reset_session("cwd-test")
+    assert "cwd-test" not in cs._agent_session_cwd
+
+
+def test_stream_task_keeps_running_after_consumer_disconnects(monkeypatch):
+    import asyncio
+
+    finished = {"done": False}
+
+    async def fake_impl(prompt, agent_id, model, mode, cwd):
+        yield {"type": "status", "message": "Ready"}
+        await asyncio.sleep(0.05)
+        finished["done"] = True
+        yield {"type": "done", "result": "ok"}
+
+    monkeypatch.setattr(cs, "_stream_task_impl", fake_impl)
+
+    async def run():
+        gen = cs.stream_task("hi", "detach-test", "haiku", "auto")
+        first = await gen.__anext__()
+        await gen.aclose()  # the browser went away after the first event
+        assert first["type"] == "status"
+        await asyncio.sleep(0.2)
+        return finished["done"]
+
+    assert asyncio.run(run()) is True
