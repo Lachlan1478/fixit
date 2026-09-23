@@ -53,7 +53,7 @@ _agent_locks: dict[str, asyncio.Lock] = {}
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
 # System prompt injected into every Claude session so it can exploit the UI features
-_SYSTEM_PROMPT = f"""\
+_SYSTEM_PROMPT_TEMPLATE = """\
 You are running inside **Claude Agent** — a mobile-first developer interface. \
 Images you produce appear inline in the user's feed as tappable thumbnails.
 
@@ -85,12 +85,19 @@ If playwright isn't installed, install it first:
 
 ## Workspace
 
-- Your current working directory IS the project root: {SESSION_CWD}
+- Your current working directory IS the project root: __CWD__
 - Write files using paths relative to that directory (e.g. claude-agent/static/result.html), \
 or absolute paths that start with the exact root above.
 - Never write to a similarly-named sibling directory. Files written outside this root do NOT \
 appear in the user's file browser or live preview, so the work looks lost.
 """
+
+
+def _system_prompt(cwd: str) -> str:
+    return _SYSTEM_PROMPT_TEMPLATE.replace("__CWD__", cwd)
+
+
+_SYSTEM_PROMPT = _system_prompt(SESSION_CWD)
 
 # Short name → full model ID
 _MODELS: dict[str, str] = {
@@ -333,7 +340,7 @@ def _summarise_tool(name: str, inp: dict) -> str:
 
 # ── Main streaming function ───────────────────────────────────────────────────
 
-async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet", mode: str = _DEFAULT_MODE) -> AsyncIterator[dict]:
+async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet", mode: str = _DEFAULT_MODE, cwd: str | None = None) -> AsyncIterator[dict]:
     """
     Run Claude Code non-interactively and yield UI-ready events:
 
@@ -348,13 +355,16 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
     to the CLI's --permission-mode. "plan" is read-only and skips session
     persistence so a planning turn never pollutes the conversation.
 
+    `cwd` (absolute, already validated by the caller) is where the CLI runs and
+    what the system prompt calls the project root; defaults to SESSION_CWD.
+
     Tasks that target the same agent_id are serialised via a per-agent lock so
     concurrent requests cannot corrupt session state.
     """
     if mode not in _PERMISSION_MODES:
         mode = _DEFAULT_MODE
     async with _get_agent_lock(agent_id):
-        inner = _stream_task_impl(prompt, agent_id, model, mode)
+        inner = _stream_task_impl(prompt, agent_id, model, mode, cwd or SESSION_CWD)
         try:
             async for event in inner:
                 yield event
@@ -364,7 +374,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
             await inner.aclose()
 
 
-async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str) -> AsyncIterator[dict]:
+async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, cwd: str) -> AsyncIterator[dict]:
     plan_mode = mode == "plan"
     session_id = None if plan_mode else _agent_sessions.get(agent_id)
     is_resume = session_id is not None
@@ -378,7 +388,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str) -
         "--verbose",
         "--permission-mode", _PERMISSION_MODES.get(mode, "bypassPermissions"),
         "--model", model_id,
-        "--system-prompt", _SYSTEM_PROMPT,
+        "--system-prompt", _system_prompt(cwd),
     ]
     if mode == "acceptEdits":
         # Block the shell tools so edits auto-apply but no commands run.
@@ -428,7 +438,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str) -
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=SESSION_CWD,
+            cwd=cwd,
             limit=10 * 1024 * 1024,  # 10 MB — Claude's stream-json lines can exceed the 64 KB default
         )
     except FileNotFoundError:

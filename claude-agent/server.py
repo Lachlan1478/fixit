@@ -93,6 +93,7 @@ class TaskRequest(BaseModel):
     model: str = "opus"  # haiku | sonnet | opus | fable
     mode: str = "auto"   # auto | acceptEdits | plan
     plan_mode: bool = False  # legacy alias; when true, forces mode="plan"
+    cwd: str | None = None   # workspace-relative folder Claude runs in (default AGENT_HOME)
 
 
 class ResetMemoryRequest(BaseModel):
@@ -107,13 +108,19 @@ async def run_task(request: TaskRequest):
 
     agent_id = request.agent_id.strip() or "default"
     mode = "plan" if request.plan_mode else request.mode
+    task_kwargs = {}
+    if request.cwd:
+        cwd = _resolve_workspace_path(request.cwd, outside_status=403)
+        if not os.path.isdir(cwd):
+            raise HTTPException(status_code=404, detail="cwd is not a directory")
+        task_kwargs["cwd"] = cwd
 
     async def event_stream():
         t0 = time.monotonic()
         event_count = 0
         logger.info("Request | agent=%s mode=%s prompt=%r", agent_id, mode, request.prompt[:60])
         try:
-            async for event in cs.stream_task(request.prompt, agent_id, request.model, mode):
+            async for event in cs.stream_task(request.prompt, agent_id, request.model, mode, **task_kwargs):
                 event_count += 1
                 if event.get("type") == "rate_limited":
                     reset_at_str = event.get("reset_at")

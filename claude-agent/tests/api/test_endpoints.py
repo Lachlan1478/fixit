@@ -6,6 +6,7 @@ stream_task is monkeypatched to an async generator for /task tests.
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -197,6 +198,27 @@ async def test_task_rate_limit_sets_state(client, monkeypatch):
     state = rl.get_state()
     assert state.is_limited is True
     assert state.reset_at is not None
+
+
+@pytest.mark.api
+async def test_task_cwd_resolved_inside_workspace(client, monkeypatch):
+    seen = {}
+
+    async def _mock(prompt, agent_id="default", model="sonnet", mode="auto", cwd=None):
+        seen["cwd"] = cwd
+        yield {"type": "done", "result": "ok"}
+
+    monkeypatch.setattr(cs, "stream_task", _mock)
+    import server
+
+    response = await client.post("/task", json={"prompt": "hi", "cwd": "claude-agent"})
+    assert response.status_code == 200
+    assert seen["cwd"] == os.path.join(os.path.realpath(server.WORKSPACE_ROOT), "claude-agent")
+
+    outside = await client.post("/task", json={"prompt": "hi", "cwd": "../.."})
+    assert outside.status_code == 403
+    missing = await client.post("/task", json={"prompt": "hi", "cwd": "no-such-dir"})
+    assert missing.status_code == 404
 
 
 # ── POST /reset_memory ────────────────────────────────────────────────────────
