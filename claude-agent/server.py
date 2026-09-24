@@ -32,7 +32,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-_LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
+_LOGS_DIR = os.environ.get("AGENT_LOGS_DIR") or os.path.join(os.path.dirname(__file__), "logs")
 
 
 @asynccontextmanager
@@ -95,6 +95,7 @@ class TaskRequest(BaseModel):
     mode: str = "auto"   # auto | acceptEdits | plan
     plan_mode: bool = False  # legacy alias; when true, forces mode="plan"
     cwd: str | None = None   # workspace-relative folder Claude runs in (default AGENT_HOME)
+    source: str = "phone"    # phone | dashboard — recorded with every prompt/response
 
 
 class ResetMemoryRequest(BaseModel):
@@ -109,7 +110,7 @@ async def run_task(request: TaskRequest):
 
     agent_id = request.agent_id.strip() or "default"
     mode = "plan" if request.plan_mode else request.mode
-    task_kwargs = {}
+    task_kwargs = {"source": (request.source or "phone")[:32]}
     if request.cwd:
         cwd = _resolve_workspace_path(request.cwd, outside_status=403)
         if not os.path.isdir(cwd):
@@ -153,6 +154,31 @@ async def run_task(request: TaskRequest):
             logger.info("Request done | agent=%s events=%d elapsed_ms=%d", agent_id, event_count, elapsed)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/logs/tasks", dependencies=_PROTECTED)
+async def logs_tasks(limit: int = 50, source: str | None = None):
+    """Recent prompt/response records from logs/sessions.jsonl, newest first."""
+    def read():
+        path = os.path.join(cs.LOGS_DIR, "sessions.jsonl")
+        rows = []
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        e = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if source and e.get("source") != source:
+                        continue
+                    rows.append({k: e.get(k) for k in (
+                        "ts", "agent_id", "session_id", "source", "model", "mode", "cwd",
+                        "prompt", "result", "assistant_text", "error", "exit_code",
+                        "tool_call_count", "total_ms", "total_cost_usd")})
+        except OSError:
+            return []
+        return rows[::-1][: max(1, min(limit, 500))]
+    return {"tasks": await asyncio.to_thread(read)}
 
 
 @app.get("/rate_limit_status")

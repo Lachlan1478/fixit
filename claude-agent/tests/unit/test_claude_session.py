@@ -220,7 +220,7 @@ def test_stream_task_keeps_running_after_consumer_disconnects(monkeypatch):
 
     finished = {"done": False}
 
-    async def fake_impl(prompt, agent_id, model, mode, cwd):
+    async def fake_impl(prompt, agent_id, model, mode, cwd, source="phone"):
         yield {"type": "status", "message": "Ready"}
         await asyncio.sleep(0.05)
         finished["done"] = True

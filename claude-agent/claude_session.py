@@ -32,7 +32,8 @@ WORKSPACE_ROOT = os.path.abspath(os.environ.get("AGENT_WORKSPACE") or os.path.jo
 # Defaults to the browsable root; override with AGENT_HOME to anchor Claude in a
 # subdirectory while still allowing the Explorer to browse the wider workspace.
 SESSION_CWD = os.path.abspath(os.environ.get("AGENT_HOME") or WORKSPACE_ROOT)
-LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
+# Where prompts/responses are logged; AGENT_LOGS_DIR overrides (tests point it at a temp dir).
+LOGS_DIR = os.environ.get("AGENT_LOGS_DIR") or os.path.join(os.path.dirname(__file__), "logs")
 
 # Seconds of stdout silence before the subprocess is considered hung
 _DEFAULT_IDLE_TIMEOUT_S = 600.0
@@ -370,7 +371,7 @@ def _summarise_tool(name: str, inp: dict) -> str:
 
 # ── Main streaming function ───────────────────────────────────────────────────
 
-async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet", mode: str = _DEFAULT_MODE, cwd: str | None = None) -> AsyncIterator[dict]:
+async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonnet", mode: str = _DEFAULT_MODE, cwd: str | None = None, source: str = "phone") -> AsyncIterator[dict]:
     """
     Run Claude Code non-interactively and yield UI-ready events:
 
@@ -401,7 +402,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         # recorded; the UI reloads history afterwards.
         async with _get_agent_lock(agent_id):
             try:
-                async for event in _stream_task_impl(prompt, agent_id, model, mode, cwd or SESSION_CWD):
+                async for event in _stream_task_impl(prompt, agent_id, model, mode, cwd or SESSION_CWD, source):
                     queue.put_nowait(event)
             except Exception as exc:
                 logger.exception("stream_task pump failed")
@@ -419,7 +420,7 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         yield event
 
 
-async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, cwd: str) -> AsyncIterator[dict]:
+async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, cwd: str, source: str = "phone") -> AsyncIterator[dict]:
     plan_mode = mode == "plan"
     session_id = None if plan_mode else _agent_sessions.get(agent_id)
     if session_id and _agent_session_cwd.get(agent_id, SESSION_CWD) != cwd:
@@ -457,6 +458,14 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         "Task start | agent=%s session=%s resume=%s prompt=%r",
         agent_id, session_id, is_resume, prompt[:80],
     )
+    # The prompt is on disk before the CLI is even spawned, so nothing is lost
+    # to a crash, a missing binary or a killed process.
+    request_log = {
+        "ts": task_start_ts, "agent_id": agent_id, "event": "task_requested",
+        "prompt": prompt, "model": model_id, "mode": mode, "cwd": cwd, "source": source,
+        "resume": session_id,
+    }
+    await _write_jsonl_async("events.jsonl", request_log)
 
     # ── Per-task accumulators ─────────────────────────────────────────────
     tool_calls: list[dict] = []          # {name, summary, input, ts_ms}
@@ -495,6 +504,13 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
             "ts": task_start_ts, "agent_id": agent_id, "event": "spawn_failed",
             "error": err_event["message"],
         })
+        await _write_jsonl_async("sessions.jsonl", {
+            "ts": task_start_ts, "agent_id": agent_id, "session_id": session_id,
+            "is_resume": is_resume, "cwd": cwd, "model": model_id, "mode": mode,
+            "source": source, "prompt": prompt, "prompt_len": len(prompt), "result": "",
+            "result_len": 0, "error": err_event["message"], "exit_code": None,
+            "tool_call_count": 0, "total_ms": 0, "num_turns": None, "total_cost_usd": None,
+        })
         yield err_event
         return
 
@@ -525,262 +541,269 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         proc.stdin.close()
 
         # ── Read stream ───────────────────────────────────────────────────
-        while True:
-            try:
-                raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=idle_timeout)
-            except asyncio.TimeoutError:
-                timed_out = True
-                timeout_msg = (
-                    f"Claude produced no output for {idle_timeout:.0f}s — task aborted"
-                )
-                logger.error(
-                    "Idle timeout | agent=%s pid=%s timeout_s=%.0f",
-                    agent_id, proc.pid, idle_timeout,
-                )
-                proc.kill()
-                await proc.wait()
-                await _write_jsonl_async("events.jsonl", {
-                    "ts": _now_iso(), "agent_id": agent_id,
-                    "event": "idle_timeout", "timeout_s": idle_timeout,
-                })
-                yield {"type": "error", "message": timeout_msg}
-                break
+        run_error: str | None = None
+        try:
+          while True:
+              try:
+                  raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=idle_timeout)
+              except asyncio.TimeoutError:
+                  timed_out = True
+                  timeout_msg = (
+                      f"Claude produced no output for {idle_timeout:.0f}s — task aborted"
+                  )
+                  logger.error(
+                      "Idle timeout | agent=%s pid=%s timeout_s=%.0f",
+                      agent_id, proc.pid, idle_timeout,
+                  )
+                  proc.kill()
+                  await proc.wait()
+                  await _write_jsonl_async("events.jsonl", {
+                      "ts": _now_iso(), "agent_id": agent_id,
+                      "event": "idle_timeout", "timeout_s": idle_timeout,
+                  })
+                  yield {"type": "error", "message": timeout_msg}
+                  break
 
-            if not raw_line:
-                break
+              if not raw_line:
+                  break
 
-            line = raw_line.decode(errors="replace").strip()
-            if not line:
-                continue
+              line = raw_line.decode(errors="replace").strip()
+              if not line:
+                  continue
 
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                await _write_jsonl_async("events.jsonl", {
-                    "ts": _now_iso(), "agent_id": agent_id,
-                    "event": "parse_error", "raw": line[:200],
-                })
-                continue
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  await _write_jsonl_async("events.jsonl", {
+                      "ts": _now_iso(), "agent_id": agent_id,
+                      "event": "parse_error", "raw": line[:200],
+                  })
+                  continue
 
-            raw_event_count += 1
-            event_type = event.get("type")
-            elapsed_ms = round(_now_ms() - task_start_ms, 1)
+              raw_event_count += 1
+              event_type = event.get("type")
+              elapsed_ms = round(_now_ms() - task_start_ms, 1)
 
-            # Save session_id for future --resume (skip in plan mode — keeps context clean)
-            if not plan_mode and "session_id" in event and event["session_id"]:
-                new_sid = event["session_id"]
-                if new_sid != session_id:
-                    _agent_sessions[agent_id] = new_sid
-                    _agent_session_cwd[agent_id] = cwd
-                    session_id = new_sid
+              # Save session_id for future --resume (skip in plan mode — keeps context clean)
+              if not plan_mode and "session_id" in event and event["session_id"]:
+                  new_sid = event["session_id"]
+                  if new_sid != session_id:
+                      _agent_sessions[agent_id] = new_sid
+                      _agent_session_cwd[agent_id] = cwd
+                      session_id = new_sid
 
-            # ── system init ──────────────────────────────────────────────
-            if event_type == "system":
-                model = event.get("model", "")
-                tools_available = len(event.get("tools", []))
-                system_init_ms = elapsed_ms
-                logger.info("Claude init | model=%s tools=%d", model, tools_available)
-                await _write_jsonl_async("events.jsonl", {
-                    "ts": _now_iso(), "agent_id": agent_id,
-                    "event": "system_init", "model": model,
-                    "tools_available": tools_available,
-                    "elapsed_ms": elapsed_ms,
-                })
-                yield {
-                    "type": "status",
-                    "message": f"Ready ({model.replace('claude-', '')} · {tools_available} tools)",
-                    "elapsed_ms": round(elapsed_ms),
-                }
+              # ── system init ──────────────────────────────────────────────
+              if event_type == "system":
+                  model = event.get("model", "")
+                  tools_available = len(event.get("tools", []))
+                  system_init_ms = elapsed_ms
+                  logger.info("Claude init | model=%s tools=%d", model, tools_available)
+                  await _write_jsonl_async("events.jsonl", {
+                      "ts": _now_iso(), "agent_id": agent_id,
+                      "event": "system_init", "model": model,
+                      "tools_available": tools_available,
+                      "elapsed_ms": elapsed_ms,
+                  })
+                  yield {
+                      "type": "status",
+                      "message": f"Ready ({model.replace('claude-', '')} · {tools_available} tools)",
+                      "elapsed_ms": round(elapsed_ms),
+                  }
 
-            # ── assistant turn ───────────────────────────────────────────
-            elif event_type == "assistant":
-                content = event.get("message", {}).get("content", [])
-                msg_usage = event.get("message", {}).get("usage", {})
+              # ── assistant turn ───────────────────────────────────────────
+              elif event_type == "assistant":
+                  content = event.get("message", {}).get("content", [])
+                  msg_usage = event.get("message", {}).get("usage", {})
 
-                for block in content:
-                    btype = block.get("type")
+                  for block in content:
+                      btype = block.get("type")
 
-                    if btype == "tool_use":
-                        name = block.get("name", "")
-                        inp = block.get("input") or {}
-                        tool_use_id = block.get("id", "")
-                        summary = _summarise_tool(name, inp)
+                      if btype == "tool_use":
+                          name = block.get("name", "")
+                          inp = block.get("input") or {}
+                          tool_use_id = block.get("id", "")
+                          summary = _summarise_tool(name, inp)
 
-                        if first_tool_ms is None:
-                            first_tool_ms = elapsed_ms
+                          if first_tool_ms is None:
+                              first_tool_ms = elapsed_ms
 
-                        tool_entry = {
-                            "name": name,
-                            "summary": summary,
-                            "input": inp,
-                            "tool_use_id": tool_use_id,
-                            "elapsed_ms": elapsed_ms,
-                        }
-                        tool_calls.append(tool_entry)
-                        last_tool_call_ts[tool_use_id] = _now_ms()
-                        tool_id_to_name[tool_use_id] = name
-                        # Start analytics record (exec_ms filled in on result)
-                        _tool_analytics.append({
-                            "ts": _now_iso(),
-                            "name": name,
-                            "elapsed_ms": elapsed_ms,
-                            "input": inp,
-                            "tool_use_id": tool_use_id,
-                            "exec_ms": None,
-                            "is_error": False,
-                        })
+                          tool_entry = {
+                              "name": name,
+                              "summary": summary,
+                              "input": inp,
+                              "tool_use_id": tool_use_id,
+                              "elapsed_ms": elapsed_ms,
+                          }
+                          tool_calls.append(tool_entry)
+                          last_tool_call_ts[tool_use_id] = _now_ms()
+                          tool_id_to_name[tool_use_id] = name
+                          # Start analytics record (exec_ms filled in on result)
+                          _tool_analytics.append({
+                              "ts": _now_iso(),
+                              "name": name,
+                              "elapsed_ms": elapsed_ms,
+                              "input": inp,
+                              "tool_use_id": tool_use_id,
+                              "exec_ms": None,
+                              "is_error": False,
+                          })
 
-                        logger.info("Tool call | %s | %s", name, summary)
-                        await _write_jsonl_async("events.jsonl", {
-                            "ts": _now_iso(), "agent_id": agent_id,
-                            "event": "tool_call", **tool_entry,
-                        })
+                          logger.info("Tool call | %s | %s", name, summary)
+                          await _write_jsonl_async("events.jsonl", {
+                              "ts": _now_iso(), "agent_id": agent_id,
+                              "event": "tool_call", **tool_entry,
+                          })
 
-                        yield {
-                            "type": "tool",
-                            "name": name,
-                            "summary": summary,
-                            "input": inp,
-                            "tool_use_id": tool_use_id,
-                            "elapsed_ms": round(elapsed_ms),
-                        }
+                          yield {
+                              "type": "tool",
+                              "name": name,
+                              "summary": summary,
+                              "input": inp,
+                              "tool_use_id": tool_use_id,
+                              "elapsed_ms": round(elapsed_ms),
+                          }
 
-                        # Emit inline image event when an image file is written
-                        if name == "Write":
-                            file_path = inp.get("file_path", "")
-                            if os.path.splitext(file_path)[1].lower() in _IMAGE_EXTS:
-                                yield {
-                                    "type": "image",
-                                    "path": file_path,
-                                    "url": f"/image?path={file_path}",
-                                }
+                          # Emit inline image event when an image file is written
+                          if name == "Write":
+                              file_path = inp.get("file_path", "")
+                              if os.path.splitext(file_path)[1].lower() in _IMAGE_EXTS:
+                                  yield {
+                                      "type": "image",
+                                      "path": file_path,
+                                      "url": f"/image?path={file_path}",
+                                  }
 
-                        # Emit todos panel update for TodoWrite
-                        if name == "TodoWrite":
-                            todos = inp.get("todos", [])
-                            if todos:
-                                yield {"type": "todos", "items": todos}
+                          # Emit todos panel update for TodoWrite
+                          if name == "TodoWrite":
+                              todos = inp.get("todos", [])
+                              if todos:
+                                  yield {"type": "todos", "items": todos}
 
-                    elif btype == "text":
-                        text = block.get("text", "").strip()
-                        if text:
-                            if first_text_ms is None:
-                                first_text_ms = elapsed_ms
-                            text_blocks.append(text)
-                            await _write_jsonl_async("events.jsonl", {
-                                "ts": _now_iso(), "agent_id": agent_id,
-                                "event": "text_block",
-                                "text": text,
-                                "length": len(text),
-                                "elapsed_ms": elapsed_ms,
-                            })
-                            yield {"type": "text", "content": text}
+                      elif btype == "text":
+                          text = block.get("text", "").strip()
+                          if text:
+                              if first_text_ms is None:
+                                  first_text_ms = elapsed_ms
+                              text_blocks.append(text)
+                              await _write_jsonl_async("events.jsonl", {
+                                  "ts": _now_iso(), "agent_id": agent_id,
+                                  "event": "text_block",
+                                  "text": text,
+                                  "length": len(text),
+                                  "elapsed_ms": elapsed_ms,
+                              })
+                              yield {"type": "text", "content": text}
 
-                # Log token usage from assistant turn if present
-                if msg_usage:
-                    await _write_jsonl_async("events.jsonl", {
-                        "ts": _now_iso(), "agent_id": agent_id,
-                        "event": "turn_usage", "usage": msg_usage,
-                        "elapsed_ms": elapsed_ms,
-                    })
+                  # Log token usage from assistant turn if present
+                  if msg_usage:
+                      await _write_jsonl_async("events.jsonl", {
+                          "ts": _now_iso(), "agent_id": agent_id,
+                          "event": "turn_usage", "usage": msg_usage,
+                          "elapsed_ms": elapsed_ms,
+                      })
 
-            # ── user turn (tool results) ──────────────────────────────────
-            elif event_type == "user":
-                content = event.get("message", {}).get("content", [])
-                for block in content:
-                    if block.get("type") == "tool_result":
-                        tool_use_id = block.get("tool_use_id", "")
-                        is_error = block.get("is_error", False)
-                        result_content = block.get("content", "")
-                        result_content_full = result_content if result_content else ""
+              # ── user turn (tool results) ──────────────────────────────────
+              elif event_type == "user":
+                  content = event.get("message", {}).get("content", [])
+                  for block in content:
+                      if block.get("type") == "tool_result":
+                          tool_use_id = block.get("tool_use_id", "")
+                          is_error = block.get("is_error", False)
+                          result_content = block.get("content", "")
+                          result_content_full = result_content if result_content else ""
 
-                        exec_ms = None
-                        if tool_use_id in last_tool_call_ts:
-                            exec_ms = round(_now_ms() - last_tool_call_ts.pop(tool_use_id), 1)
+                          exec_ms = None
+                          if tool_use_id in last_tool_call_ts:
+                              exec_ms = round(_now_ms() - last_tool_call_ts.pop(tool_use_id), 1)
 
-                        tool_name = tool_id_to_name.get(tool_use_id, "")
+                          tool_name = tool_id_to_name.get(tool_use_id, "")
 
-                        # Back-fill exec_ms + is_error on the analytics record
-                        for ta in _tool_analytics:
-                            if ta.get("tool_use_id") == tool_use_id:
-                                ta["exec_ms"] = exec_ms
-                                ta["is_error"] = is_error
-                                break
-                        logger.info(
-                            "Tool result | id=%s name=%s error=%s exec_ms=%s",
-                            tool_use_id[:8], tool_name, is_error, exec_ms,
-                        )
-                        await _write_jsonl_async("events.jsonl", {
-                            "ts": _now_iso(), "agent_id": agent_id,
-                            "event": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "tool_name": tool_name,
-                            "is_error": is_error,
-                            "result_content": result_content_full,
-                            "exec_ms": exec_ms,
-                            "elapsed_ms": elapsed_ms,
-                        })
+                          # Back-fill exec_ms + is_error on the analytics record
+                          for ta in _tool_analytics:
+                              if ta.get("tool_use_id") == tool_use_id:
+                                  ta["exec_ms"] = exec_ms
+                                  ta["is_error"] = is_error
+                                  break
+                          logger.info(
+                              "Tool result | id=%s name=%s error=%s exec_ms=%s",
+                              tool_use_id[:8], tool_name, is_error, exec_ms,
+                          )
+                          await _write_jsonl_async("events.jsonl", {
+                              "ts": _now_iso(), "agent_id": agent_id,
+                              "event": "tool_result",
+                              "tool_use_id": tool_use_id,
+                              "tool_name": tool_name,
+                              "is_error": is_error,
+                              "result_content": result_content_full,
+                              "exec_ms": exec_ms,
+                              "elapsed_ms": elapsed_ms,
+                          })
 
-                        # Emit bash output for expandable UI cards
-                        if tool_name == "Bash":
-                            if isinstance(result_content, list):
-                                content_str = "\n".join(
-                                    b.get("text", "") for b in result_content if b.get("type") == "text"
-                                )[:2000]
-                            elif isinstance(result_content, str):
-                                content_str = result_content[:2000]
-                            else:
-                                content_str = ""
-                            yield {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "name": tool_name,
-                                "content": content_str,
-                                "is_error": is_error,
-                            }
+                          # Emit bash output for expandable UI cards
+                          if tool_name == "Bash":
+                              if isinstance(result_content, list):
+                                  content_str = "\n".join(
+                                      b.get("text", "") for b in result_content if b.get("type") == "text"
+                                  )[:2000]
+                              elif isinstance(result_content, str):
+                                  content_str = result_content[:2000]
+                              else:
+                                  content_str = ""
+                              yield {
+                                  "type": "tool_result",
+                                  "tool_use_id": tool_use_id,
+                                  "name": tool_name,
+                                  "content": content_str,
+                                  "is_error": is_error,
+                              }
 
-            # ── rate limit ────────────────────────────────────────────────
-            elif event_type == "rate_limit_event":
-                info = event.get("rate_limit_info", {})
-                logger.info(
-                    "Rate limit | status=%s type=%s overage=%s",
-                    info.get("status"), info.get("rateLimitType"), info.get("overageStatus"),
-                )
-                await _write_jsonl_async("events.jsonl", {
-                    "ts": _now_iso(), "agent_id": agent_id,
-                    "event": "rate_limit", "info": info,
-                    "elapsed_ms": elapsed_ms,
-                })
+              # ── rate limit ────────────────────────────────────────────────
+              elif event_type == "rate_limit_event":
+                  info = event.get("rate_limit_info", {})
+                  logger.info(
+                      "Rate limit | status=%s type=%s overage=%s",
+                      info.get("status"), info.get("rateLimitType"), info.get("overageStatus"),
+                  )
+                  await _write_jsonl_async("events.jsonl", {
+                      "ts": _now_iso(), "agent_id": agent_id,
+                      "event": "rate_limit", "info": info,
+                      "elapsed_ms": elapsed_ms,
+                  })
 
-            # ── final result ──────────────────────────────────────────────
-            elif event_type == "result":
-                result_text = event.get("result", "")
-                total_cost_usd = event.get("total_cost_usd")
-                usage = event.get("usage", {})
-                num_turns = event.get("num_turns")
-                duration_api_ms = event.get("duration_api_ms")
-                is_error = event.get("subtype") == "error" or event.get("is_error", False)
+              # ── final result ──────────────────────────────────────────────
+              elif event_type == "result":
+                  result_text = event.get("result", "")
+                  total_cost_usd = event.get("total_cost_usd")
+                  usage = event.get("usage", {})
+                  num_turns = event.get("num_turns")
+                  duration_api_ms = event.get("duration_api_ms")
+                  is_error = event.get("subtype") == "error" or event.get("is_error", False)
 
-                if is_error:
-                    if rl.is_rate_limit_message(result_text):
-                        reset_at = rl.extract_reset_time(result_text)
-                        yield {
-                            "type": "rate_limited",
-                            "reset_at": reset_at.isoformat(),
-                            "message": result_text,
-                        }
-                    else:
-                        yield {"type": "error", "message": result_text}
-                else:
-                    yield {"type": "done", "result": result_text}
-                    if total_cost_usd is not None or usage:
-                        yield {
-                            "type": "usage",
-                            "total_cost_usd": total_cost_usd,
-                            "input_tokens": usage.get("input_tokens"),
-                            "output_tokens": usage.get("output_tokens"),
-                            "num_turns": num_turns,
-                        }
+                  if is_error:
+                      if rl.is_rate_limit_message(result_text):
+                          reset_at = rl.extract_reset_time(result_text)
+                          yield {
+                              "type": "rate_limited",
+                              "reset_at": reset_at.isoformat(),
+                              "message": result_text,
+                          }
+                      else:
+                          yield {"type": "error", "message": result_text}
+                  else:
+                      yield {"type": "done", "result": result_text}
+                      if total_cost_usd is not None or usage:
+                          yield {
+                              "type": "usage",
+                              "total_cost_usd": total_cost_usd,
+                              "input_tokens": usage.get("input_tokens"),
+                              "output_tokens": usage.get("output_tokens"),
+                              "num_turns": num_turns,
+                          }
+
+        except Exception as exc:  # noqa: BLE001 - keep the prompt/response log complete
+            run_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("stream read failed")
+            yield {"type": "error", "message": run_error}
 
         # ── Post-stream ───────────────────────────────────────────────────
         await stderr_task
@@ -821,8 +844,13 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
             "session_id": session_id,
             "is_resume": is_resume,
             "cwd": cwd,
+            "model": model_id,
+            "mode": mode,
+            "source": source,
             "prompt": prompt,
             "prompt_len": len(prompt),
+            "assistant_text": "\n\n".join(text_blocks),
+            "error": run_error,
             # Timing
             "total_ms": total_ms,
             "duration_api_ms": duration_api_ms,

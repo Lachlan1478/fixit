@@ -24,6 +24,16 @@ if _AGENT_DIR not in sys.path:
 WORKSPACE_ROOT = os.path.abspath(os.path.join(_AGENT_DIR, ".."))
 
 
+# ── Log isolation (autouse): tests never write the real logs/ directory ─────────
+
+@pytest.fixture(autouse=True)
+def isolated_logs(tmp_path, monkeypatch):
+    import claude_session as cs
+
+    monkeypatch.setattr(cs, "LOGS_DIR", str(tmp_path / "logs"))
+    yield
+
+
 # ── Rate-limit state reset (autouse) ──────────────────────────────────────────
 
 @pytest.fixture(autouse=True)

@@ -157,7 +157,7 @@ async def test_task_empty_prompt(client):
 @pytest.mark.api
 async def test_task_sse_stream(client, monkeypatch):
     """Monkeypatched stream_task → SSE content-type + events parsed."""
-    async def _mock_stream(prompt, agent_id="default", model="sonnet", plan_mode=False):
+    async def _mock_stream(prompt, agent_id="default", model="sonnet", plan_mode=False, **kwargs):
         yield {"type": "status", "message": "Ready", "elapsed_ms": 50}
         yield {"type": "done", "result": "all done"}
 
@@ -184,7 +184,7 @@ async def test_task_rate_limit_sets_state(client, monkeypatch):
 
     reset_dt = datetime.now(timezone.utc) + timedelta(hours=5)
 
-    async def _mock_rl(prompt, agent_id="default", model="sonnet", plan_mode=False):
+    async def _mock_rl(prompt, agent_id="default", model="sonnet", plan_mode=False, **kwargs):
         yield {
             "type": "rate_limited",
             "reset_at": reset_dt.isoformat(),
@@ -204,7 +204,7 @@ async def test_task_rate_limit_sets_state(client, monkeypatch):
 async def test_task_cwd_resolved_inside_workspace(client, monkeypatch):
     seen = {}
 
-    async def _mock(prompt, agent_id="default", model="sonnet", mode="auto", cwd=None):
+    async def _mock(prompt, agent_id="default", model="sonnet", mode="auto", cwd=None, **kwargs):
         seen["cwd"] = cwd
         yield {"type": "done", "result": "ok"}
 
@@ -270,3 +270,16 @@ async def test_local_sessions_endpoints(client, monkeypatch, tmp_path):
     assert (await client.post("/sessions/open-local", json={"session_id": "deadbeef-0000-0000-0000-000000000000", "cwd": "claude-agent"})).status_code == 404
     assert (await client.get("/sessions/local", params={"cwd": "../.."})).status_code == 403
     cs.reset_session("loc")
+
+
+@pytest.mark.api
+async def test_logs_tasks_endpoint_returns_recent_rows_newest_first(client):
+    os.makedirs(cs.LOGS_DIR, exist_ok=True)
+    with open(os.path.join(cs.LOGS_DIR, "sessions.jsonl"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": "1", "agent_id": "a", "source": "phone", "prompt": "one", "result": "r1"}) + "\n")
+        fh.write(json.dumps({"ts": "2", "agent_id": "a", "source": "dashboard", "prompt": "two", "result": "r2"}) + "\n")
+    resp = await client.get("/logs/tasks")
+    assert resp.status_code == 200
+    assert [t["prompt"] for t in resp.json()["tasks"]] == ["two", "one"]
+    only = await client.get("/logs/tasks", params={"source": "dashboard"})
+    assert [t["prompt"] for t in only.json()["tasks"]] == ["two"]
