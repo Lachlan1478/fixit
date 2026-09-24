@@ -63,6 +63,13 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
             self.stdin = FakeStdin()
             self.stdout = FakeStream([
                 json.dumps({"type": "system", "session_id": "s-1", "model": "claude-haiku", "tools": []}).encode() + b"\n",
+                json.dumps({"type": "assistant", "session_id": "s-1", "message": {"content": [
+                    {"type": "thinking", "thinking": "the user wants pong"},
+                    {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/tmp/x.py"}},
+                ]}}).encode() + b"\n",
+                json.dumps({"type": "user", "session_id": "s-1", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "line1\nline2"}]},
+                ]}}).encode() + b"\n",
                 json.dumps({"type": "assistant", "session_id": "s-1", "message": {"content": [{"type": "text", "text": "pong"}], "usage": {"input_tokens": 5, "cache_read_input_tokens": 100}}}).encode() + b"\n",
                 json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": 0.1, "resetsAt": 1}}}}).encode() + b"\n",
                 json.dumps({"type": "result", "session_id": "s-1", "result": "pong", "num_turns": 1}).encode() + b"\n",
@@ -91,6 +98,9 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
     assert meta["model"] == "claude-haiku" and meta["context_window"] == cs.CONTEXT_WINDOW
     assert next(e for e in events if e["type"] == "context")["used"] == 105
     assert next(e for e in events if e["type"] == "limits")["five_hour"]["used_percentage"] == 10
+    assert next(e for e in events if e["type"] == "thinking")["content"] == "the user wants pong"
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert result["name"] == "Read" and result["content"] == "line1\nline2" and result["truncated"] is False
     row = _read("sessions.jsonl")[-1]
     assert (row["prompt"].endswith("Task: ping") or row["prompt"] == "ping")
     assert row["result"] == "pong" and row["assistant_text"] == "pong"

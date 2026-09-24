@@ -64,6 +64,9 @@ _last_limits: dict | None = None
 # Context window assumed per model when the CLI does not say (matches the status line default)
 CONTEXT_WINDOW = 200_000
 
+# Tool output forwarded to the UI per call (the full text is still in events.jsonl)
+TOOL_RESULT_CHARS = 8_000
+
 # Image extensions that trigger an inline image event in the UI
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
@@ -737,6 +740,11 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                               if todos:
                                   yield {"type": "todos", "items": todos}
 
+                      elif btype == "thinking":
+                          thought = (block.get("thinking") or "").strip()
+                          if thought:
+                              yield {"type": "thinking", "content": thought[:6000]}
+
                       elif btype == "text":
                           text = block.get("text", "").strip()
                           if text:
@@ -798,23 +806,23 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                               "elapsed_ms": elapsed_ms,
                           })
 
-                          # Emit bash output for expandable UI cards
-                          if tool_name == "Bash":
-                              if isinstance(result_content, list):
-                                  content_str = "\n".join(
-                                      b.get("text", "") for b in result_content if b.get("type") == "text"
-                                  )[:2000]
-                              elif isinstance(result_content, str):
-                                  content_str = result_content[:2000]
-                              else:
-                                  content_str = ""
-                              yield {
-                                  "type": "tool_result",
-                                  "tool_use_id": tool_use_id,
-                                  "name": tool_name,
-                                  "content": content_str,
-                                  "is_error": is_error,
-                              }
+                          # Every tool's result reaches the UI (Claude Code shows the ⎿ line for all of them).
+                          if isinstance(result_content, list):
+                              content_str = "\n".join(
+                                  b.get("text", "") for b in result_content if isinstance(b, dict) and b.get("type") == "text"
+                              )
+                          elif isinstance(result_content, str):
+                              content_str = result_content
+                          else:
+                              content_str = ""
+                          yield {
+                              "type": "tool_result",
+                              "tool_use_id": tool_use_id,
+                              "name": tool_name,
+                              "content": content_str[:TOOL_RESULT_CHARS],
+                              "truncated": len(content_str) > TOOL_RESULT_CHARS,
+                              "is_error": is_error,
+                          }
 
               # ── rate limit ────────────────────────────────────────────────
               elif event_type == "rate_limit_event":
