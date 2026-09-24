@@ -189,7 +189,7 @@ async def rate_limit_status():
 
 @app.get("/history/{agent_id}", dependencies=_PROTECTED)
 async def get_history(agent_id: str):
-    return {"history": cs.get_history(agent_id)}
+    return {"history": cs.get_history(agent_id), "stats": await asyncio.to_thread(cs.session_stats, agent_id)}
 
 
 @app.get("/sessions", dependencies=_PROTECTED)

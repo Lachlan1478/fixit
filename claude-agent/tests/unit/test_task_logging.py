@@ -63,7 +63,8 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
             self.stdin = FakeStdin()
             self.stdout = FakeStream([
                 json.dumps({"type": "system", "session_id": "s-1", "model": "claude-haiku", "tools": []}).encode() + b"\n",
-                json.dumps({"type": "assistant", "session_id": "s-1", "message": {"content": [{"type": "text", "text": "pong"}]}}).encode() + b"\n",
+                json.dumps({"type": "assistant", "session_id": "s-1", "message": {"content": [{"type": "text", "text": "pong"}], "usage": {"input_tokens": 5, "cache_read_input_tokens": 100}}}).encode() + b"\n",
+                json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": 0.1, "resetsAt": 1}}}}).encode() + b"\n",
                 json.dumps({"type": "result", "session_id": "s-1", "result": "pong", "num_turns": 1}).encode() + b"\n",
             ])
             self.stderr = FakeStream([])
@@ -86,6 +87,10 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
 
     events = asyncio.run(run())
     assert any(e["type"] == "done" and e["result"] == "pong" for e in events)
+    meta = next(e for e in events if e["type"] == "meta")
+    assert meta["model"] == "claude-haiku" and meta["context_window"] == cs.CONTEXT_WINDOW
+    assert next(e for e in events if e["type"] == "context")["used"] == 105
+    assert next(e for e in events if e["type"] == "limits")["five_hour"]["used_percentage"] == 10
     row = _read("sessions.jsonl")[-1]
     assert (row["prompt"].endswith("Task: ping") or row["prompt"] == "ping")
     assert row["result"] == "pong" and row["assistant_text"] == "pong"

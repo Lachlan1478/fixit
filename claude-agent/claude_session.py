@@ -58,6 +58,12 @@ _agent_locks: dict[str, asyncio.Lock] = {}
 # Detached task pumps, referenced so the event loop never garbage-collects them
 _background_tasks: set[asyncio.Task] = set()
 
+# Last rate-limit snapshot the CLI reported (5h / 7d windows), shown in status bars
+_last_limits: dict | None = None
+
+# Context window assumed per model when the CLI does not say (matches the status line default)
+CONTEXT_WINDOW = 200_000
+
 # Image extensions that trigger an inline image event in the UI
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
@@ -136,6 +142,51 @@ _ACCEPT_EDITS_BLOCK = ["Bash", "PowerShell"]
 
 def get_history(agent_id: str) -> list[dict]:
     return _conversation_history.get(agent_id, [])
+
+
+def context_usage(usage: dict) -> dict:
+    """Tokens occupying the context after a turn: input + cache writes + cache reads. Pure."""
+    used = int(usage.get("input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0) + int(usage.get("cache_read_input_tokens") or 0)
+    return {"used": used, "output": int(usage.get("output_tokens") or 0)}
+
+
+def limits_from_info(info: dict) -> dict | None:
+    """5h / 7d utilisation and reset epochs from the CLI's rate_limit_event. Pure."""
+    windows = (info or {}).get("unifiedWindows") or {}
+    out = {}
+    for key in ("five_hour", "seven_day"):
+        w = windows.get(key) or {}
+        if w.get("utilization") is None:
+            continue
+        out[key] = {"used_percentage": round(float(w["utilization"]) * 100), "resets_at": w.get("resetsAt")}
+    return out or None
+
+
+def session_stats(agent_id: str) -> dict:
+    """Cost to date for this agent's chat, today's cost across agents, last model — from sessions.jsonl."""
+    path = os.path.join(LOGS_DIR, "sessions.jsonl")
+    today = datetime.now(timezone.utc).date().isoformat()
+    stats = {"runs": 0, "cost_usd": 0.0, "today_cost_usd": 0.0, "model": None, "limits": _last_limits}
+    current_sid = _agent_sessions.get(agent_id)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cost = float(e.get("total_cost_usd") or 0)
+                if (e.get("ts") or "")[:10] == today:
+                    stats["today_cost_usd"] += cost
+                if e.get("agent_id") == agent_id and (current_sid is None or e.get("session_id") == current_sid):
+                    stats["runs"] += 1
+                    stats["cost_usd"] += cost
+                    stats["model"] = e.get("model") or stats["model"]
+    except OSError:
+        pass
+    stats["cost_usd"] = round(stats["cost_usd"], 4)
+    stats["today_cost_usd"] = round(stats["today_cost_usd"], 4)
+    return stats
 
 
 # ── Previous chats (persistence + resume) ──────────────────────────────────────
@@ -609,6 +660,13 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                       "message": f"Ready ({model.replace('claude-', '')} · {tools_available} tools)",
                       "elapsed_ms": round(elapsed_ms),
                   }
+                  yield {
+                      "type": "meta",
+                      "model": model,
+                      "session_id": event.get("session_id") or session_id,
+                      "context_window": event.get("context_window") or CONTEXT_WINDOW,
+                      "cwd": cwd,
+                  }
 
               # ── assistant turn ───────────────────────────────────────────
               elif event_type == "assistant":
@@ -701,6 +759,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                           "event": "turn_usage", "usage": msg_usage,
                           "elapsed_ms": elapsed_ms,
                       })
+                      yield {"type": "context", **context_usage(msg_usage)}
 
               # ── user turn (tool results) ──────────────────────────────────
               elif event_type == "user":
@@ -769,6 +828,11 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                       "event": "rate_limit", "info": info,
                       "elapsed_ms": elapsed_ms,
                   })
+                  limits = limits_from_info(info)
+                  if limits:
+                      global _last_limits
+                      _last_limits = limits
+                      yield {"type": "limits", **limits}
 
               # ── final result ──────────────────────────────────────────────
               elif event_type == "result":

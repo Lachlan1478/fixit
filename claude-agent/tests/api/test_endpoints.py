@@ -63,7 +63,8 @@ async def test_history_empty(client):
     response = await client.get("/history/some-fresh-agent")
     assert response.status_code == 200
     data = response.json()
-    assert data == {"history": []}
+    assert data["history"] == []
+    assert data["stats"]["runs"] == 0 and data["stats"]["cost_usd"] == 0
 
 
 @pytest.mark.api
