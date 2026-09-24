@@ -241,3 +241,32 @@ async def test_reset_memory(client):
 async def test_reset_memory_empty_id(client):
     response = await client.post("/reset_memory", json={"agent_id": ""})
     assert response.status_code == 400
+
+
+@pytest.mark.api
+async def test_local_sessions_endpoints(client, monkeypatch, tmp_path):
+    import local_sessions
+
+    monkeypatch.setattr(local_sessions, "CLAUDE_PROJECTS", str(tmp_path))
+    import server
+
+    cwd = os.path.join(os.path.realpath(server.WORKSPACE_ROOT), "claude-agent")
+    folder = local_sessions.project_dir(cwd)
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "0123abcd-0000-0000-0000-000000000000.jsonl"), "w") as fh:
+        fh.write(json.dumps({"type": "user", "timestamp": "t", "message": {"role": "user", "content": "hello there"}}) + "\n")
+
+    listed = await client.get("/sessions/local", params={"cwd": "claude-agent"})
+    assert listed.status_code == 200
+    assert listed.json()["sessions"][0]["title"] == "hello there"
+
+    opened = await client.post("/sessions/open-local", json={"agent_id": "loc", "session_id": "0123abcd-0000-0000-0000-000000000000", "cwd": "claude-agent"})
+    assert opened.status_code == 200
+    assert opened.json()["history"][0]["content"] == "hello there"
+    assert cs._agent_sessions["loc"] == "0123abcd-0000-0000-0000-000000000000"
+    assert cs._agent_session_cwd["loc"] == cwd
+
+    assert (await client.post("/sessions/open-local", json={"session_id": "../../etc", "cwd": "claude-agent"})).status_code == 400
+    assert (await client.post("/sessions/open-local", json={"session_id": "deadbeef-0000-0000-0000-000000000000", "cwd": "claude-agent"})).status_code == 404
+    assert (await client.get("/sessions/local", params={"cwd": "../.."})).status_code == 403
+    cs.reset_session("loc")

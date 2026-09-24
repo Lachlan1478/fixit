@@ -231,6 +231,22 @@ def open_conversation(agent_id: str, session_id: str) -> list[dict] | None:
     return None
 
 
+def open_local_session(agent_id: str, session_id: str, cwd: str) -> list[dict] | None:
+    """Resume a Claude Code session started elsewhere (VS Code, a terminal) in the same folder."""
+    import local_sessions
+
+    path = os.path.join(local_sessions.project_dir(cwd), f"{session_id}.jsonl")
+    if not os.path.isfile(path):
+        return None
+    turns = local_sessions.load_local_turns(path)
+    _agent_sessions[agent_id] = session_id
+    _agent_session_cwd[agent_id] = os.path.abspath(cwd)
+    _conversation_history[agent_id] = list(turns)
+    logger.info("Opened local Claude Code session | agent=%s session=%s cwd=%s turns=%d",
+                agent_id, session_id, cwd, len(turns))
+    return turns
+
+
 def hydrate_state() -> None:
     """On startup, restore each agent's most recent chat (session_id + turns) so
     conversations survive a server restart."""

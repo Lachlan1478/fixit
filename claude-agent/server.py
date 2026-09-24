@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -176,6 +177,10 @@ class OpenSessionRequest(BaseModel):
     agent_id: str = "default"
 
 
+class OpenLocalSessionRequest(OpenSessionRequest):
+    cwd: str = ""  # workspace-relative folder the session was created in
+
+
 @app.post("/sessions/open", dependencies=_PROTECTED)
 async def open_session(req: OpenSessionRequest):
     """Reopen a past chat in an agent tab: restore its turns and set it as the
@@ -184,6 +189,27 @@ async def open_session(req: OpenSessionRequest):
     if turns is None:
         raise HTTPException(status_code=404, detail="Unknown session_id")
     return {"history": turns}
+
+
+@app.get("/sessions/local", dependencies=_PROTECTED)
+async def list_local_sessions(cwd: str = "", limit: int = 30):
+    """Claude Code's own sessions for a workspace folder (VS Code / terminal chats), newest first."""
+    import local_sessions
+
+    abs_cwd = _resolve_workspace_path(cwd, outside_status=403) if cwd else cs.SESSION_CWD
+    return {"sessions": await asyncio.to_thread(local_sessions.list_local_sessions, abs_cwd, max(1, min(limit, 100)))}
+
+
+@app.post("/sessions/open-local", dependencies=_PROTECTED)
+async def open_local_session(req: OpenLocalSessionRequest):
+    """Point an agent tab at a Claude Code session from that folder's store."""
+    abs_cwd = _resolve_workspace_path(req.cwd, outside_status=403) if req.cwd else cs.SESSION_CWD
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", req.session_id):
+        raise HTTPException(status_code=400, detail="Invalid session_id")
+    turns = await asyncio.to_thread(cs.open_local_session, req.agent_id or "default", req.session_id, abs_cwd)
+    if turns is None:
+        raise HTTPException(status_code=404, detail="Unknown local session")
+    return {"history": turns, "cwd": abs_cwd}
 
 
 _TREE_SKIP = {
