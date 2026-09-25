@@ -88,6 +88,33 @@ async def root():
     return RedirectResponse(url="/static/index.html")
 
 
+KEEPALIVE_SECONDS = 15.0
+
+
+async def _with_keepalive(stream, every: float):
+    """Yield the stream's events, and None whenever `every` seconds pass without one."""
+    it = stream.__aiter__()
+    pending = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(it.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=every)
+            if not done:
+                yield None
+                continue
+            try:
+                event = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield event
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+        await it.aclose()
+
+
 class TaskRequest(BaseModel):
     prompt: str
     agent_id: str = "default"
@@ -122,7 +149,12 @@ async def run_task(request: TaskRequest):
         event_count = 0
         logger.info("Request | agent=%s mode=%s prompt=%r", agent_id, mode, request.prompt[:60])
         try:
-            async for event in cs.stream_task(request.prompt, agent_id, request.model, mode, **task_kwargs):
+            async for event in _with_keepalive(cs.stream_task(request.prompt, agent_id, request.model, mode, **task_kwargs), KEEPALIVE_SECONDS):
+                if event is None:
+                    # SSE comment: keeps proxies (Node's fetch drops a body silent for 5 min) and
+                    # browsers from giving up while Claude is inside a long tool call.
+                    yield ": keepalive\n\n"
+                    continue
                 event_count += 1
                 if event.get("type") == "rate_limited":
                     reset_at_str = event.get("reset_at")

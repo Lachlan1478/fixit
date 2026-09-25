@@ -5,6 +5,7 @@ Uses httpx.AsyncClient backed by the FastAPI app (no live server, no Claude).
 stream_task is monkeypatched to an async generator for /task tests.
 """
 
+import asyncio
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -284,3 +285,21 @@ async def test_logs_tasks_endpoint_returns_recent_rows_newest_first(client):
     assert [t["prompt"] for t in resp.json()["tasks"]] == ["two", "one"]
     only = await client.get("/logs/tasks", params={"source": "dashboard"})
     assert [t["prompt"] for t in only.json()["tasks"]] == ["two"]
+
+
+@pytest.mark.api
+async def test_task_stream_sends_keepalives_during_silence(client, monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "KEEPALIVE_SECONDS", 0.05)
+
+    async def _slow(prompt, agent_id="default", model="sonnet", mode="auto", **kwargs):
+        yield {"type": "status", "message": "Ready"}
+        await asyncio.sleep(0.2)
+        yield {"type": "done", "result": "ok"}
+
+    monkeypatch.setattr(cs, "stream_task", _slow)
+    response = await client.post("/task", json={"prompt": "hello"})
+    assert response.status_code == 200
+    assert response.text.count(": keepalive") >= 2
+    assert '"type": "done"' in response.text
