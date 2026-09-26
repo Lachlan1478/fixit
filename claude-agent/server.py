@@ -11,15 +11,14 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import analytics
 import claude_session as cs
 import rate_limit as rl
-from notifications import send_notification
 
 # Browsable/containment root for the file Explorer and file endpoints.
 # Defaults to the repo root (parent of claude-agent); override with AGENT_WORKSPACE
@@ -39,6 +38,7 @@ _LOGS_DIR = os.environ.get("AGENT_LOGS_DIR") or os.path.join(os.path.dirname(__f
 async def lifespan(app: FastAPI):
     analytics.init_db(_LOGS_DIR)
     cs.hydrate_state()  # restore each agent's latest chat from disk (survives restarts)
+    rl.resume()
     if not os.environ.get("AGENT_API_KEY"):
         logger.warning(
             "AGENT_API_KEY is not set — API endpoints are unauthenticated "
@@ -112,7 +112,14 @@ async def _with_keepalive(stream, every: float):
     finally:
         if pending is not None and not pending.done():
             pending.cancel()
-        await it.aclose()
+            try:
+                await pending
+            except (asyncio.CancelledError, StopAsyncIteration, Exception):  # noqa: BLE001
+                pass
+        try:
+            await it.aclose()
+        except RuntimeError:
+            pass  # the generator finished on its own between our check and the close
 
 
 class TaskRequest(BaseModel):
@@ -123,6 +130,8 @@ class TaskRequest(BaseModel):
     plan_mode: bool = False  # legacy alias; when true, forces mode="plan"
     cwd: str | None = None   # workspace-relative folder Claude runs in (default AGENT_HOME)
     source: str = "phone"    # phone | dashboard — recorded with every prompt/response
+    defer: bool = False      # queue instead of running now
+    max_usage: int | None = Field(default=None, ge=1, le=100)  # only run while 5h usage is under this %
 
 
 class ResetMemoryRequest(BaseModel):
@@ -138,11 +147,23 @@ async def run_task(request: TaskRequest):
     agent_id = request.agent_id.strip() or "default"
     mode = "plan" if request.plan_mode else request.mode
     task_kwargs = {"source": (request.source or "phone")[:32]}
+    cwd = cs.SESSION_CWD
     if request.cwd:
         cwd = _resolve_workspace_path(request.cwd, outside_status=403)
         if not os.path.isdir(cwd):
             raise HTTPException(status_code=404, detail="cwd is not a directory")
         task_kwargs["cwd"] = cwd
+
+    state = rl.get_state()
+    if state.is_limited or request.defer:
+        entry = state.enqueue(request.prompt, agent_id, request.model, mode, cwd, max_usage=request.max_usage)
+        logger.info("Queued | agent=%s position=%d cap=%s prompt=%r", agent_id, len(state.queue), request.max_usage, request.prompt[:60])
+        if not state.is_limited:
+            rl.kick()
+        return {
+            "queued": True, "id": entry["id"], "position": len(state.queue), "max_usage": request.max_usage,
+            "is_limited": state.is_limited, "reset_at": state.to_dict()["reset_at"],
+        }
 
     async def event_stream():
         t0 = time.monotonic()
@@ -157,25 +178,12 @@ async def run_task(request: TaskRequest):
                     continue
                 event_count += 1
                 if event.get("type") == "rate_limited":
-                    reset_at_str = event.get("reset_at")
                     try:
-                        reset_at = datetime.fromisoformat(reset_at_str)
+                        reset_at = datetime.fromisoformat(event.get("reset_at"))
                     except Exception:
                         reset_at = datetime.now(timezone.utc)
-
-                    state = rl.get_state()
-                    state.set_limited(reset_at)
-
-                    # Launch background watcher (idempotent — skips if already running)
-                    if state._watch_task is None or state._watch_task.done():
-                        state._watch_task = asyncio.create_task(rl.watch_and_clear(reset_at))
-
-                    # Notify immediately that the limit was hit
-                    asyncio.create_task(send_notification(
-                        f"⚠️ Claude usage limit hit!\n"
-                        f"Will automatically resume at: {reset_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
-                        f"You'll be notified when the limit resets."
-                    ))
+                    entry = await rl.handle_limit_hit(reset_at, request.prompt, agent_id, request.model, mode, cwd)
+                    event = {**event, "queued_id": entry["id"], "queued": len(rl.get_state().queue)}
 
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
@@ -213,10 +221,48 @@ async def logs_tasks(limit: int = 50, source: str | None = None):
     return {"tasks": await asyncio.to_thread(read)}
 
 
+@app.get("/task/live/{agent_id}", dependencies=_PROTECTED)
+async def task_live(agent_id: str, since: int = 0):
+    """Re-attach to a run that is still going (or just finished): replay events from `since`, then follow."""
+    live = cs.get_live_run(agent_id)
+    if live is None:
+        return Response(status_code=204)
+
+    async def follow():
+        idx = max(0, since)
+        while True:
+            events, done = live.snapshot()
+            while idx < len(events):
+                yield f"data: {json.dumps(events[idx])}\n\n"
+                idx += 1
+            if done:
+                return
+            try:
+                await asyncio.wait_for(live.changed.wait(), timeout=KEEPALIVE_SECONDS)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+            live.changed.clear()
+
+    return StreamingResponse(follow(), media_type="text/event-stream")
+
+
 @app.get("/rate_limit_status")
 async def rate_limit_status():
     """Return current rate-limit state so the UI can show a countdown."""
     return rl.get_state().to_dict()
+
+
+@app.get("/queue", dependencies=_PROTECTED)
+async def get_queue():
+    state = rl.get_state()
+    return {**state.to_dict(), "queue": state.queue}
+
+
+@app.delete("/queue/{entry_id}", dependencies=_PROTECTED)
+async def delete_queued(entry_id: str):
+    if not rl.get_state().remove(entry_id):
+        raise HTTPException(status_code=404, detail="Not queued")
+    return {"ok": True}
 
 
 @app.get("/history/{agent_id}", dependencies=_PROTECTED)

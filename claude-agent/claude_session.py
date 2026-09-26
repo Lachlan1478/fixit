@@ -61,11 +61,51 @@ _background_tasks: set[asyncio.Task] = set()
 # Last rate-limit snapshot the CLI reported (5h / 7d windows), shown in status bars
 _last_limits: dict | None = None
 
+
+class LiveRun:
+    """Events of an agent's current (or most recent) run, so a client can re-attach mid-stream."""
+
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+        self.done = False
+        self.finished_at: float | None = None
+        self.changed = asyncio.Event()
+
+    def add(self, event: dict) -> None:
+        self.events.append(event)
+        self.changed.set()
+
+    def finish(self) -> None:
+        self.done = True
+        self.finished_at = time.time()
+        self.changed.set()
+
+    def snapshot(self) -> tuple[list[dict], bool]:
+        return list(self.events), self.done
+
+
+LIVE_RUN_TTL_S = 600.0
+_live_runs: dict[str, LiveRun] = {}
+
+
+def get_live_run(agent_id: str) -> LiveRun | None:
+    """The agent's in-flight run, or one finished within LIVE_RUN_TTL_S; else None."""
+    run = _live_runs.get(agent_id)
+    if run is None:
+        return None
+    if run.done and run.finished_at and time.time() - run.finished_at > LIVE_RUN_TTL_S:
+        _live_runs.pop(agent_id, None)
+        return None
+    return run
+
 # Context window assumed per model when the CLI does not say (matches the status line default)
 CONTEXT_WINDOW = 200_000
 
 # Tool output forwarded to the UI per call (the full text is still in events.jsonl)
 TOOL_RESULT_CHARS = 8_000
+
+# events.jsonl is renamed with a timestamp once it passes this; sessions.jsonl never rotates (it backs the picker)
+EVENTS_ROTATE_BYTES = 50 * 1024 * 1024
 
 # Image extensions that trigger an inline image event in the UI
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
@@ -121,7 +161,7 @@ _SYSTEM_PROMPT = _system_prompt(SESSION_CWD)
 _MODELS: dict[str, str] = {
     "haiku":  "claude-haiku-4-5-20251001",
     "sonnet": "claude-sonnet-4-6",
-    "opus":   "claude-opus-4-6",
+    "opus":   "claude-opus-5-5",
     "fable":  "claude-fable-5-1",
 }
 
@@ -163,6 +203,14 @@ def limits_from_info(info: dict) -> dict | None:
             continue
         out[key] = {"used_percentage": round(float(w["utilization"]) * 100), "resets_at": w.get("resetsAt")}
     return out or None
+
+
+def cli_reset_time(info: dict) -> datetime | None:
+    """Reset time from a rejecting rate_limit_event (status other than allowed*). Pure."""
+    status = str((info or {}).get("status") or "")
+    if status.startswith("allowed") or not (info or {}).get("resetsAt"):
+        return None
+    return datetime.fromtimestamp(int(info["resetsAt"]), tz=timezone.utc)
 
 
 def session_stats(agent_id: str) -> dict:
@@ -357,6 +405,8 @@ def _write_jsonl(filename: str, entry: dict) -> None:
     _ensure_logs_dir()
     path = os.path.join(LOGS_DIR, filename)
     try:
+        if filename == "events.jsonl" and os.path.exists(path) and os.path.getsize(path) > EVENTS_ROTATE_BYTES:
+            os.replace(path, path.replace(".jsonl", f".{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.jsonl"))
         with open(path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError as e:
@@ -449,19 +499,29 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
     if mode not in _PERMISSION_MODES:
         mode = _DEFAULT_MODE
     queue: asyncio.Queue = asyncio.Queue()
+    lock = _get_agent_lock(agent_id)
+    if lock.locked():
+        # A previous run in this terminal is still finishing; say so instead of going quiet.
+        queue.put_nowait({"type": "status", "message": "Waiting for the previous run in this terminal to finish…"})
 
     async def pump() -> None:
         # Runs to completion even if the SSE consumer disconnects (e.g. the web
-        # app redeploys itself mid-task), so Claude finishes and the turn is
-        # recorded; the UI reloads history afterwards.
-        async with _get_agent_lock(agent_id):
+        # app redeploys itself mid-task, or a phone locks its screen), so Claude
+        # finishes and the turn is recorded; clients re-attach via /task/live.
+        async with lock:
+            live = LiveRun()
+            _live_runs[agent_id] = live
             try:
                 async for event in _stream_task_impl(prompt, agent_id, model, mode, cwd or SESSION_CWD, source):
+                    live.add(event)
                     queue.put_nowait(event)
             except Exception as exc:
                 logger.exception("stream_task pump failed")
-                queue.put_nowait({"type": "error", "message": str(exc)})
+                err = {"type": "error", "message": str(exc)}
+                live.add(err)
+                queue.put_nowait(err)
             finally:
+                live.finish()
                 queue.put_nowait(None)
 
     task = asyncio.create_task(pump())
@@ -531,6 +591,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
     result_text = ""
     total_cost_usd: float | None = None
     usage: dict = {}
+    cli_reset_at: datetime | None = None
     num_turns: int | None = None
     duration_api_ms: float | None = None
     timed_out = False
@@ -743,6 +804,10 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                       elif btype == "thinking":
                           thought = (block.get("thinking") or "").strip()
                           if thought:
+                              await _write_jsonl_async("events.jsonl", {
+                                  "ts": _now_iso(), "agent_id": agent_id,
+                                  "event": "thinking", "content": thought,
+                              })
                               yield {"type": "thinking", "content": thought[:6000]}
 
                       elif btype == "text":
@@ -836,6 +901,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                       "event": "rate_limit", "info": info,
                       "elapsed_ms": elapsed_ms,
                   })
+                  cli_reset_at = cli_reset_time(info) or cli_reset_at
                   limits = limits_from_info(info)
                   if limits:
                       global _last_limits
@@ -853,7 +919,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
 
                   if is_error:
                       if rl.is_rate_limit_message(result_text):
-                          reset_at = rl.extract_reset_time(result_text)
+                          reset_at = cli_reset_at or rl.extract_reset_time(result_text)
                           yield {
                               "type": "rate_limited",
                               "reset_at": reset_at.isoformat(),
@@ -894,7 +960,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         # Handle unexpected exit (idle timeout already yielded its own error)
         if exit_code != 0 and not result_text and not timed_out:
             if rl.is_rate_limit_message(stderr_text):
-                reset_at = rl.extract_reset_time(stderr_text)
+                reset_at = cli_reset_at or rl.extract_reset_time(stderr_text)
                 yield {
                     "type": "rate_limited",
                     "reset_at": reset_at.isoformat(),

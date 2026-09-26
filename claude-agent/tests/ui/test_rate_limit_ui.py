@@ -3,10 +3,9 @@ UI mock tests for rate-limit UX.
 
 Tests cover:
 - Banner shown on rate_limited event
-- Pending prompt saved
+- Queued JSON reply from /task renders the Queued item and the queue list
 - Auto-clear: uses page.clock to advance fake time past the 10 s poll interval
   so the real production poll function fires (no injected JS)
-- Auto-resume of queued prompt after limit clears
 - Banner shown on initial page load when already limited
 - Countdown decrements
 """
@@ -56,21 +55,28 @@ def test_banner_shown(ui_page, route_task_sse):
     # Note: the sendPrompt() finally-block re-enables the button after SSE ends;
     # showRateLimitBanner sets it disabled but finally overrides. Check status dot.
     expect(ui_page.locator("#status-dot")).to_have_class("status-dot limited")
+    expect(ui_page.locator("#send-btn")).to_have_text("Queue")
 
 
-# ── pending prompt saved ──────────────────────────────────────────────────────
+# ── queued reply ──────────────────────────────────────────────────────────────
 
 @pytest.mark.ui
-def test_pending_prompt_saved(ui_page, route_task_sse):
-    """The prompt value should be saved as _pendingPrompt when rate limited."""
-    route_task_sse(ui_page, _rate_limited_events(_far_future_iso()))
+def test_queued_reply_renders_queue(ui_page, route_json_endpoint):
+    """A JSON {queued} reply from /task shows the Queued item and the server's queue list."""
+    route_json_endpoint(ui_page, "**/task", {"queued": True, "id": "ab12", "position": 2, "reset_at": _far_future_iso()})
+    route_json_endpoint(ui_page, "**/queue", {"is_limited": True, "reset_at": _far_future_iso(), "queued": 2, "queue": [
+        {"id": "aa00", "agent_id": "default", "prompt": "first thing"},
+        {"id": "ab12", "agent_id": "default", "prompt": "do the thing"},
+    ]})
 
     _send(ui_page, "do the thing")
-    ui_page.wait_for_selector("#rate-limit-banner", state="visible", timeout=5_000)
 
-    # let variables in <script> blocks are NOT window properties; access by bare name
-    pending = ui_page.evaluate("() => _pendingPrompt")
-    assert pending == "do the thing"
+    expect(ui_page.locator("#rate-limit-banner")).to_be_visible(timeout=5_000)
+    expect(ui_page.locator(".feed-item.text").last).to_contain_text("#2")
+    expect(ui_page.locator("#rl-queue li")).to_have_count(2)
+    expect(ui_page.locator("#rl-queue li").last).to_contain_text("do the thing")
+    expect(ui_page.locator("#send-btn")).to_have_text("Queue")
+    expect(ui_page.locator("#send-btn")).to_be_enabled()
 
 
 # ── auto-clear banner ─────────────────────────────────────────────────────────
@@ -128,48 +134,6 @@ def test_auto_clear(page, live_server_url, route_task_sse, route_rate_limit_stat
     expect(page.locator("#send-btn")).to_be_enabled()
 
 
-# ── auto-resume ───────────────────────────────────────────────────────────────
-
-@pytest.mark.ui
-def test_auto_resume(page, live_server_url, route_task_sse, route_rate_limit_status):
-    """
-    After the banner clears and _pendingPrompt is set, /task is called again.
-    Uses page.clock for the same reason as test_auto_clear.
-    """
-    _make_clock_page(page, live_server_url, route_task_sse, route_rate_limit_status)
-
-    route_task_sse(page, _rate_limited_events(_future_iso(hours=0.5)))
-    _send(page, "resumeable task")
-    page.wait_for_selector("#rate-limit-banner", state="visible", timeout=8_000)
-
-    # Track second /task call
-    task_calls = []
-
-    def _task_handler(route):
-        task_calls.append(1)
-        body = "data: " + json.dumps({"type": "done", "result": "resumed!"}) + "\n\n"
-        route.fulfill(status=200, headers={"Content-Type": "text/event-stream"}, body=body)
-
-    page.route("**/task", _task_handler)
-
-    route_rate_limit_status(page, [
-        {"is_limited": True,  "reset_at": _future_iso(hours=0.5)},
-        {"is_limited": False, "reset_at": None},
-    ])
-
-    # Fire the real production poll
-    page.clock.fast_forward(10_500)
-    # Wait for the auto-resume sendPrompt (has a 1000 ms setTimeout inside)
-    page.clock.fast_forward(1_500)
-    page.wait_for_timeout(1_000)
-
-    page.wait_for_function(
-        "() => document.querySelectorAll('.feed-item.done').length >= 2",
-        timeout=10_000,
-    )
-    assert len(task_calls) >= 1
-
-
 # ── banner on page load ───────────────────────────────────────────────────────
 
 @pytest.mark.ui
@@ -215,3 +179,35 @@ def test_countdown_decrements(ui_page, route_task_sse):
 
     # Countdown should have advanced (decreased or changed)
     assert countdown_t0 != countdown_t2 or countdown_t0 == "—"
+
+
+# ── deferred (usage-capped) prompt ───────────────────────────────────────────
+
+@pytest.mark.ui
+def test_deferred_reply_renders_queue_panel(ui_page, route_json_endpoint):
+    """Picking a cap sends defer/max_usage and a queued reply shows the queue panel, not the limit state."""
+    sent = []
+
+    def _task(route):
+        sent.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(
+            {"queued": True, "id": "cd34", "position": 1, "max_usage": 50, "is_limited": False, "reset_at": None}))
+
+    ui_page.route("**/task", _task)
+    route_json_endpoint(ui_page, "**/queue", {
+        "is_limited": False, "reset_at": None, "queued": 1,
+        "usage": {"used_percentage": 63, "resets_at": 4102444800},
+        "queue": [{"id": "cd34", "agent_id": "default", "prompt": "big refactor", "max_usage": 50}],
+    })
+    ui_page.evaluate("document.getElementById('defer-select').value = '50'")
+
+    _send(ui_page, "big refactor")
+
+    expect(ui_page.locator("#rate-limit-banner")).to_be_visible(timeout=5_000)
+    assert sent[0]["defer"] is True and sent[0]["max_usage"] == 50
+    expect(ui_page.locator("#rl-title")).to_contain_text("Queued prompts")
+    expect(ui_page.locator("#rl-countdown")).to_have_text("63% of 5h used")
+    expect(ui_page.locator("#rl-queue li").first).to_contain_text("≤50% big refactor")
+    expect(ui_page.locator(".feed-item.text").last).to_contain_text("under 50%")
+    expect(ui_page.locator("#send-btn")).to_have_text("Send")
+    expect(ui_page.locator("#status-dot")).to_have_class("status-dot live")

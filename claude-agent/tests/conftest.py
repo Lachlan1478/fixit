@@ -30,7 +30,10 @@ WORKSPACE_ROOT = os.path.abspath(os.path.join(_AGENT_DIR, ".."))
 def isolated_logs(tmp_path, monkeypatch):
     import claude_session as cs
 
+    import rate_limit as rl
+
     monkeypatch.setattr(cs, "LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(rl, "QUEUE_FILE", str(tmp_path / "logs" / "queue.json"))
     yield
 
 
@@ -52,6 +55,7 @@ def reset_rate_limit_state():
     state._watch_task = None
     state.is_limited = False
     state.reset_at = None
+    state.queue = []
     state._cleared = asyncio.Event()   # fresh event — avoids stale-loop binding
     state._cleared.set()               # mark as "not limited"
 
@@ -59,6 +63,7 @@ def reset_rate_limit_state():
 
     state.is_limited = False
     state.reset_at = None
+    state.queue = []
     state._watch_task = None
     state._cleared = asyncio.Event()
     state._cleared.set()
@@ -99,16 +104,10 @@ def mock_notifications(monkeypatch):
     """Prevent real network notifications during all tests."""
     import notifications
 
-    async def _noop(msg: str) -> bool:
+    async def _noop(msg: str, subject: str = "") -> bool:
         return False
 
     monkeypatch.setattr(notifications, "send_notification", _noop)
-    # Also patch the already-bound reference in server.py if loaded
-    try:
-        import server
-        monkeypatch.setattr(server, "send_notification", _noop)
-    except ImportError:
-        pass
 
 
 # ── In-process API client ──────────────────────────────────────────────────────
@@ -119,7 +118,7 @@ async def client():
     import httpx
     from server import app
 
-    async with httpx.AsyncClient(app=app, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
         yield c
 
 

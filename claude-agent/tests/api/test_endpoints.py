@@ -195,11 +195,43 @@ async def test_task_rate_limit_sets_state(client, monkeypatch):
 
     monkeypatch.setattr(cs, "stream_task", _mock_rl)
 
-    await client.post("/task", json={"prompt": "hello"})
+    response = await client.post("/task", json={"prompt": "hello", "model": "opus"})
+    event = json.loads(response.text.split("data: ", 1)[1].split("\n")[0])
 
     state = rl.get_state()
     assert state.is_limited is True
     assert state.reset_at is not None
+    assert event["queued"] == 1 and event["queued_id"] == state.queue[0]["id"]
+    assert state.queue[0]["prompt"] == "hello" and state.queue[0]["model"] == "opus"
+    assert state.queue[0]["cwd"] == cs.SESSION_CWD
+    state._watch_task.cancel()
+
+
+@pytest.mark.api
+async def test_task_while_limited_is_queued_not_run(client, monkeypatch):
+    called = []
+
+    async def _never(*a, **kw):
+        called.append(1)
+        yield {"type": "done", "result": "x"}
+
+    monkeypatch.setattr(cs, "stream_task", _never)
+    reset_dt = datetime(2099, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    rl.get_state().set_limited(reset_dt)
+
+    response = await client.post("/task", json={"prompt": "later", "cwd": "claude-agent"})
+    body = response.json()
+
+    assert response.status_code == 200 and body["queued"] is True and body["position"] == 1
+    assert body["reset_at"] == reset_dt.isoformat()
+    assert called == []
+    assert rl.get_state().queue[0]["cwd"].endswith("claude-agent")
+
+    listing = (await client.get("/queue")).json()
+    assert listing["queued"] == 1 and listing["queue"][0]["id"] == body["id"]
+    assert (await client.delete(f"/queue/{body['id']}")).status_code == 200
+    assert (await client.delete(f"/queue/{body['id']}")).status_code == 404
+    assert (await client.get("/rate_limit_status")).json()["queued"] == 0
 
 
 @pytest.mark.api
@@ -303,3 +335,73 @@ async def test_task_stream_sends_keepalives_during_silence(client, monkeypatch):
     assert response.status_code == 200
     assert response.text.count(": keepalive") >= 2
     assert '"type": "done"' in response.text
+
+
+def _usage(used: int) -> dict:
+    return {"five_hour": {"used_percentage": used, "resets_at": 4102444800}}
+
+
+@pytest.mark.api
+async def test_task_defer_runs_when_usage_under_cap(client, monkeypatch):
+    ran = []
+
+    async def _run(prompt, agent_id="default", model="sonnet", mode="auto", **kw):
+        ran.append(prompt)
+        yield {"type": "done", "result": "ok"}
+
+    monkeypatch.setattr(cs, "stream_task", _run)
+    monkeypatch.setattr(cs, "_last_limits", _usage(20))
+
+    body = (await client.post("/task", json={"prompt": "later", "defer": True, "max_usage": 50})).json()
+    assert body["queued"] is True and body["is_limited"] is False and body["max_usage"] == 50
+    await asyncio.gather(*rl._kick_tasks)
+
+    assert ran == ["later"] and rl.get_state().queue == []
+
+
+@pytest.mark.api
+async def test_task_defer_held_while_usage_over_cap(client, monkeypatch):
+    called = []
+
+    async def _never(*a, **kw):
+        called.append(1)
+        yield {"type": "done", "result": "x"}
+
+    monkeypatch.setattr(cs, "stream_task", _never)
+    monkeypatch.setattr(cs, "_last_limits", _usage(80))
+
+    body = (await client.post("/task", json={"prompt": "later", "defer": True, "max_usage": 50})).json()
+    await asyncio.gather(*rl._kick_tasks)
+    state = rl.get_state()
+
+    assert called == [] and state.queue[0]["max_usage"] == 50 and state.is_limited is False
+    assert state._watch_task is not None and not state._watch_task.done()
+    listing = (await client.get("/queue")).json()
+    assert listing["usage"]["used_percentage"] == 80 and listing["queue"][0]["id"] == body["id"]
+    assert (await client.get("/rate_limit_status")).json()["queued"] == 1
+    state._watch_task.cancel()
+
+
+@pytest.mark.api
+async def test_task_max_usage_validated(client):
+    assert (await client.post("/task", json={"prompt": "x", "defer": True, "max_usage": 150})).status_code == 422
+
+
+@pytest.mark.api
+async def test_task_live_replays_and_follows_then_204_when_idle(client, monkeypatch):
+    live = cs.LiveRun()
+    live.add({"type": "status", "message": "a"})
+    live.add({"type": "text", "content": "b"})
+    monkeypatch.setitem(cs._live_runs, "reattach", live)
+
+    async def finish_soon():
+        await asyncio.sleep(0.05)
+        live.add({"type": "done", "result": "c"})
+        live.finish()
+
+    asyncio.ensure_future(finish_soon())
+    resp = await client.get("/task/live/reattach", params={"since": 1})
+    assert resp.status_code == 200
+    types = [json.loads(l[6:])["type"] for l in resp.text.splitlines() if l.startswith("data: ")]
+    assert types == ["text", "done"]
+    assert (await client.get("/task/live/nobody-here")).status_code == 204

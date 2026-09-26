@@ -99,6 +99,7 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
     assert next(e for e in events if e["type"] == "context")["used"] == 105
     assert next(e for e in events if e["type"] == "limits")["five_hour"]["used_percentage"] == 10
     assert next(e for e in events if e["type"] == "thinking")["content"] == "the user wants pong"
+    assert next(e for e in _read("events.jsonl") if e["event"] == "thinking")["content"] == "the user wants pong"
     result = next(e for e in events if e["type"] == "tool_result")
     assert result["name"] == "Read" and result["content"] == "line1\nline2" and result["truncated"] is False
     row = _read("sessions.jsonl")[-1]
@@ -106,3 +107,16 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
     assert row["result"] == "pong" and row["assistant_text"] == "pong"
     assert row["source"] == "dashboard" and row["mode"] == "plan" and row["model"] == cs._MODELS["fable"]
     assert row["error"] is None
+
+
+def test_events_log_rotates_past_size_cap(monkeypatch, tmp_path):
+    monkeypatch.setattr(cs, "LOGS_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "EVENTS_ROTATE_BYTES", 10)
+    cs._write_jsonl("events.jsonl", {"event": "a", "pad": "x" * 20})
+    cs._write_jsonl("events.jsonl", {"event": "b"})
+    cs._write_jsonl("sessions.jsonl", {"pad": "x" * 20})
+    cs._write_jsonl("sessions.jsonl", {"pad": "y"})
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert len([n for n in names if n.startswith("events.")]) == 2
+    assert names.count("sessions.jsonl") == 1 and len([n for n in names if n.startswith("sessions.")]) == 1
+    assert json.loads((tmp_path / "events.jsonl").read_text())["event"] == "b"

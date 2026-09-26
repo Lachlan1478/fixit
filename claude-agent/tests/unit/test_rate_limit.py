@@ -187,7 +187,7 @@ async def test_state_wait_until_clear():
 def test_to_dict_not_limited():
     state = RateLimitState()
     d = state.to_dict()
-    assert d == {"is_limited": False, "reset_at": None}
+    assert d == {"is_limited": False, "reset_at": None, "queued": 0, "usage": None}
 
 
 @pytest.mark.unit
@@ -198,3 +198,173 @@ def test_to_dict_limited():
     d = state.to_dict()
     assert d["is_limited"] is True
     assert d["reset_at"] == reset_at.isoformat()
+
+
+# ── Queue tests ──────────────────────────────────────────────────────────────
+
+def _entry(state, prompt="p", **kw):
+    return state.enqueue(prompt, kw.get("agent_id", "a"), kw.get("model", "opus"), kw.get("mode", "auto"), kw.get("cwd", "/w/lifetracker"), front=kw.get("front", False))
+
+
+def test_enqueue_order_front_and_remove():
+    state = rl.get_state()
+    a = _entry(state, "first")
+    b = _entry(state, "second")
+    c = _entry(state, "interrupted", front=True)
+    assert [e["prompt"] for e in state.queue] == ["interrupted", "first", "second"]
+    assert state.remove(a["id"]) is True
+    assert state.remove("nope") is False
+    assert [e["id"] for e in state.queue] == [c["id"], b["id"]]
+    assert state.to_dict()["queued"] == 2
+
+
+def test_queue_persists_and_reloads():
+    state = rl.get_state()
+    reset = datetime.now(timezone.utc) + timedelta(hours=2)
+    state.set_limited(reset)
+    _entry(state, "later")
+
+    fresh = RateLimitState()
+    assert fresh.load() is True
+    assert fresh.is_limited and fresh.reset_at == reset
+    assert [e["prompt"] for e in fresh.queue] == ["later"]
+
+
+def test_load_ignores_empty_queue():
+    state = rl.get_state()
+    state.set_limited(datetime.now(timezone.utc) + timedelta(hours=2))
+    fresh = RateLimitState()
+    assert fresh.load() is False
+    assert fresh.is_limited is False
+
+
+async def test_drain_runs_in_order_emails_and_requeues_on_limit(monkeypatch):
+    import claude_session as cs
+    import notifications
+
+    state = rl.get_state()
+    _entry(state, "one", cwd="/w/lifetracker")
+    _entry(state, "two", cwd="/w/fixit")
+    runs, mails = [], []
+    reset_again = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+    async def fake_stream(prompt, agent_id, model, mode, cwd=None, source="phone"):
+        runs.append((prompt, agent_id, model, mode, cwd, source))
+        if prompt == "two" and len(runs) == 2:
+            yield {"type": "rate_limited", "reset_at": reset_again, "message": "limit"}
+            return
+        yield {"type": "text", "content": "working"}
+        yield {"type": "done", "result": f"did {prompt}"}
+
+    async def fake_notify(message, subject=""):
+        mails.append((subject, message))
+        return True
+
+    monkeypatch.setattr(cs, "stream_task", fake_stream)
+    monkeypatch.setattr(notifications, "send_notification", fake_notify)
+
+    await rl.drain_queue()
+
+    assert [r[0] for r in runs] == ["one", "two"]
+    assert runs[0][1:] == ("a", "opus", "auto", "/w/lifetracker", "queue")
+    assert [e["prompt"] for e in state.queue] == ["two"]
+    assert state.is_limited and state.reset_at.isoformat() == reset_again
+    assert [m[0] for m in mails] == ["Claude resumed · lifetracker", "Claude finished · lifetracker", "Claude resumed · fixit"]
+    assert "Prompt:\none" in mails[0][1] and "Result:\ndid one" in mails[1][1]
+
+    state.clear_limit()
+    await rl.drain_queue()
+    assert state.queue == [] and [r[0] for r in runs] == ["one", "two", "two"]
+
+
+async def test_handle_limit_hit_queues_front_and_notifies(monkeypatch):
+    import notifications
+
+    mails = []
+
+    async def fake_notify(message, subject=""):
+        mails.append((subject, message))
+        return True
+
+    async def never_run(reset_at):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(notifications, "send_notification", fake_notify)
+    monkeypatch.setattr(rl, "watch_and_clear", never_run)
+    state = rl.get_state()
+    _entry(state, "already waiting")
+    reset = datetime.now(timezone.utc) + timedelta(hours=3)
+
+    entry = await rl.handle_limit_hit(reset, "broken off", "desk", "opus", "auto", "/w/lifetracker")
+
+    assert state.is_limited and state.reset_at == reset
+    assert [e["prompt"] for e in state.queue] == ["broken off", "already waiting"]
+    assert entry["id"] == state.queue[0]["id"]
+    assert mails[0][0] == "Claude limit hit · lifetracker" and "2 prompt(s) queued" in mails[0][1]
+    assert state._watch_task is not None and not state._watch_task.done()
+    state._watch_task.cancel()
+
+
+# ── Usage-capped deferral ─────────────────────────────────────────────────────
+
+def _window(used: int, resets_in: int = 3600) -> dict:
+    return {"five_hour": {"used_percentage": used, "resets_at": int(datetime.now(timezone.utc).timestamp()) + resets_in}}
+
+
+@pytest.mark.parametrize("entry,limits,expect_blocked", [
+    ({"max_usage": None}, _window(99), False),
+    ({"max_usage": 50}, _window(20), False),
+    ({"max_usage": 50}, _window(50), True),
+    ({"max_usage": 50}, _window(80), True),
+    ({"max_usage": 50}, _window(80, resets_in=-60), False),   # window rolled over since the CLI last reported
+    ({"max_usage": 50}, None, False),                         # no snapshot yet
+])
+def test_blocked_until(monkeypatch, entry, limits, expect_blocked):
+    import claude_session as cs
+
+    monkeypatch.setattr(cs, "_last_limits", limits)
+    blocked = rl.blocked_until(entry)
+    if expect_blocked:
+        assert blocked == datetime.fromtimestamp(limits["five_hour"]["resets_at"], tz=timezone.utc)
+    else:
+        assert blocked is None
+
+
+async def test_drain_skips_capped_entries_and_runs_the_rest(monkeypatch):
+    import claude_session as cs
+
+    ran = []
+
+    async def _run(prompt, *a, **kw):
+        ran.append(prompt)
+        yield {"type": "done", "result": "ok"}
+
+    monkeypatch.setattr(cs, "stream_task", _run)
+    monkeypatch.setattr(cs, "_last_limits", _window(80))
+    state = rl.get_state()
+    state.enqueue("capped", "default", "opus", "auto", "/tmp/proj", max_usage=50)
+    state.enqueue("free", "default", "opus", "auto", "/tmp/proj")
+
+    wake_at = await rl.drain_queue()
+
+    assert ran == ["free"]
+    assert [e["prompt"] for e in state.queue] == ["capped"]
+    assert wake_at == datetime.fromtimestamp(cs._last_limits["five_hour"]["resets_at"], tz=timezone.utc)
+
+
+async def test_drain_runs_capped_entry_once_usage_drops(monkeypatch):
+    import claude_session as cs
+
+    ran = []
+
+    async def _run(prompt, *a, **kw):
+        ran.append(prompt)
+        yield {"type": "done", "result": "ok"}
+
+    monkeypatch.setattr(cs, "stream_task", _run)
+    monkeypatch.setattr(cs, "_last_limits", _window(10))
+    state = rl.get_state()
+    state.enqueue("capped", "default", "opus", "auto", "/tmp/proj", max_usage=50)
+
+    assert await rl.drain_queue() is None
+    assert ran == ["capped"] and state.queue == []
