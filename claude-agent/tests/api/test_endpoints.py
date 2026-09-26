@@ -186,14 +186,14 @@ async def test_task_rate_limit_sets_state(client, monkeypatch):
 
     reset_dt = datetime.now(timezone.utc) + timedelta(hours=5)
 
-    async def _mock_rl(prompt, agent_id="default", model="sonnet", plan_mode=False, **kwargs):
+    async def _mock_rl(prompt, agent_id, model, mode, cwd, source="phone"):
         yield {
             "type": "rate_limited",
             "reset_at": reset_dt.isoformat(),
             "message": "Usage limit reached",
         }
 
-    monkeypatch.setattr(cs, "stream_task", _mock_rl)
+    monkeypatch.setattr(cs, "_stream_task_impl", _mock_rl)
 
     response = await client.post("/task", json={"prompt": "hello", "model": "opus"})
     event = json.loads(response.text.split("data: ", 1)[1].split("\n")[0])
@@ -415,3 +415,32 @@ async def test_stop_and_config(client, monkeypatch):
     monkeypatch.setattr(cs, "stop_run", lambda agent_id: agent_id == "busy")
     assert (await client.post("/task/stop/busy")).json() == {"stopped": True}
     assert (await client.get("/config")).json() == {"session_cwd": cs.SESSION_CWD, "workspace": server.WORKSPACE_ROOT}
+
+
+@pytest.mark.api
+async def test_keepalive_lets_a_repeated_cancel_propagate():
+    import server
+
+    closed = []
+
+    async def slow():
+        try:
+            await asyncio.sleep(10)
+            yield {"type": "never"}
+        finally:
+            closed.append(1)
+            await asyncio.sleep(0.05)
+
+    async def consume():
+        async for _ in server._with_keepalive(slow(), 5):
+            pass
+
+    task = asyncio.ensure_future(consume())
+    await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.1)
+    assert task.cancelled() and closed == [1]

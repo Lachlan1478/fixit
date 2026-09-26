@@ -6,7 +6,6 @@ import re
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -110,16 +109,11 @@ async def _with_keepalive(stream, every: float):
             pending = None
             yield event
     finally:
-        if pending is not None and not pending.done():
-            pending.cancel()
-            try:
-                await pending
-            except (asyncio.CancelledError, StopAsyncIteration, Exception):  # noqa: BLE001
-                pass
-        try:
+        # A cancelled in-flight read ends the generator itself; aclose() is only safe when none is in flight.
+        if pending is None:
             await it.aclose()
-        except RuntimeError:
-            pass  # the generator finished on its own between our check and the close
+        else:
+            pending.cancel()
 
 
 class TaskRequest(BaseModel):
@@ -177,14 +171,6 @@ async def run_task(request: TaskRequest):
                     yield ": keepalive\n\n"
                     continue
                 event_count += 1
-                if event.get("type") == "rate_limited":
-                    try:
-                        reset_at = datetime.fromisoformat(event.get("reset_at"))
-                    except Exception:
-                        reset_at = datetime.now(timezone.utc)
-                    entry = await rl.handle_limit_hit(reset_at, request.prompt, agent_id, request.model, cwd)
-                    event = {**event, "queued_id": entry["id"], "queued": len(rl.get_state().queue)}
-
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             logger.error("stream_task error: %s", exc)
@@ -242,6 +228,7 @@ async def task_live(agent_id: str, since: int = 0):
     async def follow():
         idx = max(0, since)
         while True:
+            changed = live.changed
             events, done = live.snapshot()
             while idx < len(events):
                 yield f"data: {json.dumps(events[idx])}\n\n"
@@ -249,10 +236,9 @@ async def task_live(agent_id: str, since: int = 0):
             if done:
                 return
             try:
-                await asyncio.wait_for(live.changed.wait(), timeout=KEEPALIVE_SECONDS)
+                await asyncio.wait_for(changed.wait(), timeout=KEEPALIVE_SECONDS)
             except asyncio.TimeoutError:
                 yield ": keepalive\n\n"
-            live.changed.clear()
 
     return StreamingResponse(follow(), media_type="text/event-stream")
 

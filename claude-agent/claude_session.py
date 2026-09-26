@@ -75,14 +75,19 @@ class LiveRun:
         self.finished_at: float | None = None
         self.changed = asyncio.Event()
 
+    def _notify(self) -> None:
+        # Swap in a fresh Event so every follower wakes and none has to clear() it for the others.
+        self.changed.set()
+        self.changed = asyncio.Event()
+
     def add(self, event: dict) -> None:
         self.events.append(event)
-        self.changed.set()
+        self._notify()
 
     def finish(self) -> None:
         self.done = True
         self.finished_at = time.time()
-        self.changed.set()
+        self._notify()
 
     def snapshot(self) -> tuple[list[dict], bool]:
         return list(self.events), self.done
@@ -522,19 +527,23 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         mode = _DEFAULT_MODE
     queue: asyncio.Queue = asyncio.Queue()
     lock = _get_agent_lock(agent_id)
+    live = LiveRun()
+    _live_runs[agent_id] = live
     if lock.locked():
         # A previous run in this terminal is still finishing; say so instead of going quiet.
-        queue.put_nowait({"type": "status", "message": "Waiting for the previous run in this terminal to finish…"})
+        waiting = {"type": "status", "message": "Waiting for the previous run in this terminal to finish…"}
+        live.add(waiting)
+        queue.put_nowait(waiting)
 
     async def pump() -> None:
         # Runs to completion even if the SSE consumer disconnects (e.g. the web
         # app redeploys itself mid-task, or a phone locks its screen), so Claude
         # finishes and the turn is recorded; clients re-attach via /task/live.
         async with lock:
-            live = LiveRun()
-            _live_runs[agent_id] = live
             try:
                 async for event in _stream_task_impl(prompt, agent_id, model, mode, cwd or SESSION_CWD, source):
+                    if event.get("type") == "rate_limited" and source != "queue":
+                        event = await _queue_after_limit(event, prompt, agent_id, model, cwd or SESSION_CWD)
                     live.add(event)
                     queue.put_nowait(event)
             except Exception as exc:
@@ -554,6 +563,16 @@ async def stream_task(prompt: str, agent_id: str = "default", model: str = "sonn
         if event is None:
             return
         yield event
+
+
+async def _queue_after_limit(event: dict, prompt: str, agent_id: str, model: str, cwd: str) -> dict:
+    """Queue the prompt for after the reset (the queue's own runs requeue themselves)."""
+    try:
+        reset_at = datetime.fromisoformat(event.get("reset_at"))
+    except (TypeError, ValueError):
+        reset_at = datetime.now(timezone.utc)
+    entry = await rl.handle_limit_hit(reset_at, prompt, agent_id, model, cwd)
+    return {**event, "queued_id": entry["id"], "queued": len(rl.get_state().queue)}
 
 
 async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, cwd: str, source: str = "phone") -> AsyncIterator[dict]:
@@ -681,7 +700,8 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         try:
           while True:
               try:
-                  raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=idle_timeout)
+                  # A tool call in flight (a long build, a test run) may be silent for any length of time.
+                  raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=None if last_tool_call_ts else idle_timeout)
               except asyncio.TimeoutError:
                   timed_out = True
                   timeout_msg = (
