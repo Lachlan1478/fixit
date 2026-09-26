@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+import urllib.parse
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
@@ -753,7 +754,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                       session_id = new_sid
 
               # ── system init ──────────────────────────────────────────────
-              if event_type == "system":
+              if event_type == "system" and event.get("subtype") == "init":
                   model = event.get("model", "")
                   tools_available = len(event.get("tools", []))
                   system_init_ms = elapsed_ms
@@ -837,7 +838,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
                                   yield {
                                       "type": "image",
                                       "path": file_path,
-                                      "url": f"/image?path={file_path}",
+                                      "url": f"/image?path={urllib.parse.quote(file_path)}",
                                   }
 
                           # Emit todos panel update for TodoWrite

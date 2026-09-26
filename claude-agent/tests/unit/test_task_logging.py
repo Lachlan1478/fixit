@@ -62,10 +62,12 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
         def __init__(self):
             self.stdin = FakeStdin()
             self.stdout = FakeStream([
-                json.dumps({"type": "system", "session_id": "s-1", "model": "claude-haiku", "tools": []}).encode() + b"\n",
+                json.dumps({"type": "system", "subtype": "init", "session_id": "s-1", "model": "claude-haiku", "tools": []}).encode() + b"\n",
+                json.dumps({"type": "system", "subtype": "status", "session_id": "s-1"}).encode() + b"\n",
                 json.dumps({"type": "assistant", "session_id": "s-1", "message": {"content": [
                     {"type": "thinking", "thinking": "the user wants pong"},
                     {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/tmp/x.py"}},
+                    {"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "/tmp/a b#1.png"}},
                 ]}}).encode() + b"\n",
                 json.dumps({"type": "user", "session_id": "s-1", "message": {"content": [
                     {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "line1\nline2"}]},
@@ -94,8 +96,10 @@ def test_completed_run_logs_prompt_response_model_and_source(monkeypatch):
 
     events = asyncio.run(run())
     assert any(e["type"] == "done" and e["result"] == "pong" for e in events)
-    meta = next(e for e in events if e["type"] == "meta")
-    assert meta["model"] == "claude-haiku" and meta["context_window"] == cs.CONTEXT_WINDOW
+    metas = [e for e in events if e["type"] == "meta"]
+    assert len(metas) == 1 and metas[0]["model"] == "claude-haiku" and metas[0]["context_window"] == cs.CONTEXT_WINDOW
+    assert [e["message"] for e in events if e["type"] == "status"] == ["Ready (haiku · 0 tools)"]
+    assert next(e for e in events if e["type"] == "image")["url"] == "/image?path=/tmp/a%20b%231.png"
     assert next(e for e in events if e["type"] == "context")["used"] == 105
     assert next(e for e in events if e["type"] == "limits")["five_hour"]["used_percentage"] == 10
     assert next(e for e in events if e["type"] == "thinking")["content"] == "the user wants pong"
