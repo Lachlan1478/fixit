@@ -55,11 +55,23 @@ uvicorn server:app --host 0.0.0.0 --port 8007 --app-dir claude-agent
 
 Open `http://localhost:8007` (or your Tailscale address) from any device.
 
+### Access token
+
+Without `AGENT_API_KEY` the API only answers loopback clients (this Mac, and the
+lifetracker container via `host.docker.internal`). To use it from the phone or
+the tailnet, set a key where the server starts (e.g. `export AGENT_API_KEY=…` in
+`start-claude.sh`, or a gitignored `.env`) — `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+Clients send it as `Authorization: Bearer <key>`; the phone page takes it once
+from `http://<host>:8007/?token=<key>` and keeps it, and the server sets an
+HttpOnly cookie so images and previews load too.
+
 ## API
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/task` | POST `{prompt, agent_id}` | Run a prompt. Returns SSE stream of events. |
+| `/task/stop/{agent_id}` | POST | Kill the agent's running Claude process → `{stopped}`. |
+| `/config` | GET | `{session_cwd, workspace}` absolute paths. |
 | `/reset_memory` | POST `{agent_id}` | Clear conversation history for an agent. |
 | `/repo` | GET | Git status + diff for the workspace. |
 | `/file` | GET `?path=` | Read a file from the workspace. |

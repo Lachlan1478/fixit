@@ -40,8 +40,8 @@ async def lifespan(app: FastAPI):
     rl.resume()
     if not os.environ.get("AGENT_API_KEY"):
         logger.warning(
-            "AGENT_API_KEY is not set — API endpoints are unauthenticated "
-            "(personal-tool default). Set AGENT_API_KEY to require a bearer token."
+            "AGENT_API_KEY is not set — API endpoints only answer loopback clients. "
+            "Set AGENT_API_KEY to allow the phone/tailnet with a bearer token."
         )
     yield
 
@@ -49,28 +49,31 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-# ── Auth (opt-in bearer token) ────────────────────────────────────────────────
+# ── Auth (bearer token; loopback-only without one) ────────────────────────────────────────────────
 
-async def require_token(request: Request) -> None:
-    """
-    Opt-in bearer-token auth. Enforced only when AGENT_API_KEY is set (non-empty).
+_TOKEN_COOKIE = "agent_token"
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
-    Accepts either an `Authorization: Bearer <token>` header or a `?token=`
-    query parameter. Comparison is constant-time via secrets.compare_digest.
-    """
+
+async def require_token(request: Request, response: Response) -> None:
+    """Require AGENT_API_KEY as a bearer header, ?token= or cookie; without a key, loopback only."""
     api_key = os.environ.get("AGENT_API_KEY", "")
     if not api_key:
-        return  # personal-tool default: no auth configured
+        if request.client and request.client.host in _LOOPBACK:
+            return
+        raise HTTPException(status_code=401, detail="Remote access needs AGENT_API_KEY set on the server")
 
     supplied = ""
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         supplied = auth_header[len("bearer "):].strip()
-    if not supplied:
-        supplied = request.query_params.get("token", "")
+    supplied = supplied or request.query_params.get("token", "") or request.cookies.get(_TOKEN_COOKIE, "")
 
     if not supplied or not secrets.compare_digest(supplied.encode(), api_key.encode()):
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
+    # <img>/<iframe> loads cannot send the bearer header; the cookie lets them through.
+    if request.cookies.get(_TOKEN_COOKIE) != api_key:
+        response.set_cookie(_TOKEN_COOKIE, api_key, httponly=True, samesite="strict", max_age=400 * 86400)
 
 
 _PROTECTED = [Depends(require_token)]
