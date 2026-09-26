@@ -456,3 +456,32 @@ async def test_opening_a_session_is_refused_while_the_agent_runs(client):
     finally:
         lock.release()
     assert (await client.post("/sessions/open", json={"agent_id": "busy-agent", "session_id": "s"})).status_code == 404
+
+
+@pytest.mark.api
+async def test_tree_and_files_skip_broken_symlinks(client, monkeypatch, tmp_path):
+    import server
+
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "ok.txt").write_text("hi")
+    (tmp_path / "sub" / "dangling").symlink_to(tmp_path / "missing")
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(server, "WORKSPACE_ROOT", str(tmp_path))
+
+    tree = (await client.get("/tree?depth=3")).json()
+    assert [c["name"] for c in tree["children"]] == ["sub"]
+    assert [c["name"] for c in tree["children"][0]["children"]] == ["ok.txt"]
+    listing = await client.get("/files", params={"path": "sub"})
+    assert listing.status_code == 200 and [f["name"] for f in listing.json()["files"]] == ["ok.txt"]
+
+
+@pytest.mark.api
+async def test_files_rejects_dot_dirs_and_symlink_escapes(client, monkeypatch, tmp_path):
+    import server
+
+    ws = tmp_path / "ws"
+    (ws / ".git").mkdir(parents=True)
+    (ws / "out").symlink_to(tmp_path)
+    monkeypatch.setattr(server, "WORKSPACE_ROOT", str(ws))
+    assert (await client.get("/files", params={"path": ".git"})).status_code == 403
+    assert (await client.get("/files", params={"path": "out"})).status_code == 400

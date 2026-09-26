@@ -333,7 +333,7 @@ def _build_tree(abs_path: str, rel_path: str, depth: int) -> dict:
         return node
     try:
         entries = sorted(os.listdir(abs_path), key=lambda e: (not os.path.isdir(os.path.join(abs_path, e)), e.lower()))
-    except PermissionError:
+    except OSError:
         return node
     for entry in entries:
         if entry.startswith(".") or entry in _TREE_SKIP:
@@ -342,46 +342,48 @@ def _build_tree(abs_path: str, rel_path: str, depth: int) -> dict:
         child_rel = (rel_path + "/" + entry).lstrip("/")
         if os.path.isdir(child_abs):
             node["children"].append(_build_tree(child_abs, child_rel, depth - 1))
-        else:
-            node["children"].append({
-                "name": entry,
-                "path": child_rel,
-                "type": "file",
-                "size": os.path.getsize(child_abs),
-            })
+        elif (size := _size(child_abs)) is not None:
+            node["children"].append({"name": entry, "path": child_rel, "type": "file", "size": size})
     return node
+
+
+def _size(path: str) -> int | None:
+    """File size, or None for a broken symlink / vanished file."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
 
 
 @app.get("/tree", dependencies=_PROTECTED)
 async def get_tree(depth: int = 4):
     depth = max(1, min(depth, 6))
-    return _build_tree(WORKSPACE_ROOT, "", depth)
+    return await asyncio.to_thread(_build_tree, WORKSPACE_ROOT, "", depth)
 
 
-@app.get("/files", dependencies=_PROTECTED)
-async def list_files(path: str = ""):
-    if path:
-        abs_path = os.path.normpath(os.path.join(WORKSPACE_ROOT, path))
-    else:
-        abs_path = WORKSPACE_ROOT
-    if not (abs_path.startswith(WORKSPACE_ROOT + os.sep) or abs_path == WORKSPACE_ROOT):
-        raise HTTPException(status_code=400, detail="Path outside workspace")
-    if not os.path.isdir(abs_path):
-        raise HTTPException(status_code=404, detail="Not a directory")
-
+def _list_dir(abs_path: str) -> dict:
+    root = os.path.realpath(WORKSPACE_ROOT)
     dirs, files = [], []
     for entry in sorted(os.listdir(abs_path), key=str.lower):
         if entry.startswith('.'):
             continue
         entry_abs = os.path.join(abs_path, entry)
-        rel = os.path.relpath(entry_abs, WORKSPACE_ROOT).replace("\\", "/")
+        rel = os.path.relpath(entry_abs, root).replace("\\", "/")
         if os.path.isdir(entry_abs):
             dirs.append({"name": entry, "path": rel})
-        else:
-            files.append({"name": entry, "path": rel, "size": os.path.getsize(entry_abs)})
-
-    rel_cur = os.path.relpath(abs_path, WORKSPACE_ROOT).replace("\\", "/")
+        elif (size := _size(entry_abs)) is not None:
+            files.append({"name": entry, "path": rel, "size": size})
+    rel_cur = os.path.relpath(abs_path, root).replace("\\", "/")
     return {"path": "" if rel_cur == "." else rel_cur, "dirs": dirs, "files": files}
+
+
+@app.get("/files", dependencies=_PROTECTED)
+async def list_files(path: str = ""):
+    abs_path = _resolve_workspace_path(path, outside_status=400)
+    _reject_sensitive_path(abs_path)
+    if not os.path.isdir(abs_path):
+        raise HTTPException(status_code=404, detail="Not a directory")
+    return await asyncio.to_thread(_list_dir, abs_path)
 
 
 @app.post("/reset_memory", dependencies=_PROTECTED)
