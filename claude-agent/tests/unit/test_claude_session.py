@@ -258,3 +258,30 @@ def test_stream_task_keeps_running_after_consumer_disconnects(monkeypatch):
         return finished["done"]
 
     assert asyncio.run(run()) is True
+
+
+def _write_sessions(rows):
+    import json
+    import os
+
+    os.makedirs(cs.LOGS_DIR, exist_ok=True)
+    with open(os.path.join(cs.LOGS_DIR, "sessions.jsonl"), "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps({"agent_id": "a", "cwd": "/w", **r}) + "\n")
+
+
+def test_resumed_run_extends_the_thread_it_resumed():
+    _write_sessions([
+        {"ts": "1", "session_id": "s1", "is_resume": False, "prompt": "first chat", "result": "r1"},
+        {"ts": "2", "session_id": "s2", "is_resume": False, "prompt": "second chat", "result": "r2"},
+        {"ts": "3", "session_id": "s1", "is_resume": True, "prompt": "legacy back to s1", "result": "r3"},
+        {"ts": "4", "session_id": None, "is_resume": False, "mode": "plan", "prompt": "a plan", "result": "p"},
+        {"ts": "5", "session_id": "s2", "is_resume": True, "resumed_from": "s2", "prompt": "more s2", "result": "r5"},
+        {"ts": "6", "session_id": "s3", "is_resume": True, "resumed_from": "local-x", "prompt": "vscode chat", "result": "r6"},
+    ])
+    listed = {c["session_id"]: c for c in cs.list_conversations()}
+    assert sorted(listed) == ["s1", "s2", "s3"]
+    assert listed["s1"]["turn_count"] == 4 and listed["s2"]["turn_count"] == 4 and listed["s3"]["turn_count"] == 2
+    turns = cs.open_conversation("b", "s1")
+    assert [t["content"] for t in turns if t["role"] == "user"] == ["first chat", "legacy back to s1"]
+    assert cs._agent_sessions["b"] == "s1"

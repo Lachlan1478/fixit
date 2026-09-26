@@ -282,10 +282,16 @@ class OpenLocalSessionRequest(OpenSessionRequest):
     cwd: str = ""  # workspace-relative folder the session was created in
 
 
+def _reject_if_busy(agent_id: str) -> None:
+    if cs.is_busy(agent_id):
+        raise HTTPException(status_code=409, detail="This agent is running a task; stop it or wait before opening another chat")
+
+
 @app.post("/sessions/open", dependencies=_PROTECTED)
 async def open_session(req: OpenSessionRequest):
     """Reopen a past chat in an agent tab: restore its turns and set it as the
     --resume target so the next prompt continues it."""
+    _reject_if_busy(req.agent_id)
     turns = await asyncio.to_thread(cs.open_conversation, req.agent_id, req.session_id)
     if turns is None:
         raise HTTPException(status_code=404, detail="Unknown session_id")
@@ -304,6 +310,7 @@ async def list_local_sessions(cwd: str = "", limit: int = 30):
 @app.post("/sessions/open-local", dependencies=_PROTECTED)
 async def open_local_session(req: OpenLocalSessionRequest):
     """Point an agent tab at a Claude Code session from that folder's store."""
+    _reject_if_busy(req.agent_id or "default")
     abs_cwd = _resolve_workspace_path(req.cwd, outside_status=403) if req.cwd else cs.SESSION_CWD
     if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", req.session_id):
         raise HTTPException(status_code=400, detail="Invalid session_id")

@@ -444,3 +444,15 @@ async def test_keepalive_lets_a_repeated_cancel_propagate():
         await task
     await asyncio.sleep(0.1)
     assert task.cancelled() and closed == [1]
+
+
+@pytest.mark.api
+async def test_opening_a_session_is_refused_while_the_agent_runs(client):
+    lock = cs._get_agent_lock("busy-agent")
+    await lock.acquire()
+    try:
+        assert (await client.post("/sessions/open", json={"agent_id": "busy-agent", "session_id": "s"})).status_code == 409
+        assert (await client.post("/sessions/open-local", json={"agent_id": "busy-agent", "session_id": "0123abcd-0000"})).status_code == 409
+    finally:
+        lock.release()
+    assert (await client.post("/sessions/open", json={"agent_id": "busy-agent", "session_id": "s"})).status_code == 404

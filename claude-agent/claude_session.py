@@ -260,14 +260,15 @@ def session_stats(agent_id: str) -> dict:
 def _reconstruct_conversations() -> list[dict]:
     """Rebuild conversation threads from sessions.jsonl, in start order.
 
-    A new thread begins whenever a task ran without --resume (is_resume False);
-    subsequent resumed tasks extend it. Each thread carries its running turn list
-    and the latest session_id, which is the value to --resume it from.
+    A resumed task extends the thread of the session it resumed (`resumed_from`;
+    older rows only have is_resume, and the CLI keeps the session_id on resume);
+    anything else starts a new thread. Each thread carries its turns and the
+    latest session_id, which is the value to --resume it from.
     """
     path = os.path.join(LOGS_DIR, "sessions.jsonl")
     if not os.path.exists(path):
         return []
-    current: dict[str, dict] = {}   # agent_id → thread being extended
+    by_sid: dict[str, dict] = {}
     threads: list[dict] = []
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -285,8 +286,9 @@ def _reconstruct_conversations() -> list[dict]:
                 prompt = (e.get("prompt") or "").strip()
                 result = e.get("result") or ""
                 ts = e.get("ts")
-                thread = current.get(agent_id)
-                if thread is None or not e.get("is_resume"):
+                target = e["resumed_from"] if "resumed_from" in e else (sid if e.get("is_resume") else None)
+                thread = by_sid.get(target) if target else None
+                if thread is None:
                     first_line = prompt.splitlines()[0] if prompt else "(no prompt)"
                     thread = {
                         "agent_id": agent_id,
@@ -297,7 +299,6 @@ def _reconstruct_conversations() -> list[dict]:
                         "cwd": cwd,
                         "turns": [],
                     }
-                    current[agent_id] = thread
                     threads.append(thread)
                 thread["turns"].append({"role": "user", "content": prompt, "ts": ts})
                 if result:
@@ -305,6 +306,8 @@ def _reconstruct_conversations() -> list[dict]:
                 if sid:
                     thread["session_id"] = sid
                     thread["cwd"] = cwd
+                    by_sid[sid] = thread
+                thread["agent_id"] = agent_id
                 thread["last_ts"] = ts
     except OSError as exc:
         logger.error("could not read sessions.jsonl: %s", exc)
@@ -582,6 +585,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         logger.info("Agent %s moved to %s — starting a fresh session", agent_id, cwd)
         session_id = None
     is_resume = session_id is not None
+    resumed_from = session_id
     task_start_ms = _now_ms()
     task_start_ts = _now_iso()
 
@@ -659,7 +663,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         })
         await _write_jsonl_async("sessions.jsonl", {
             "ts": task_start_ts, "agent_id": agent_id, "session_id": session_id,
-            "is_resume": is_resume, "cwd": cwd, "model": model_id, "mode": mode,
+            "is_resume": is_resume, "resumed_from": session_id, "cwd": cwd, "model": model_id, "mode": mode,
             "source": source, "prompt": prompt, "prompt_len": len(prompt), "result": "",
             "result_len": 0, "error": err_event["message"], "exit_code": None,
             "tool_call_count": 0, "total_ms": 0, "num_turns": None, "total_cost_usd": None,
@@ -1025,6 +1029,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
             "agent_id": agent_id,
             "session_id": session_id,
             "is_resume": is_resume,
+            "resumed_from": resumed_from,
             "cwd": cwd,
             "model": model_id,
             "mode": mode,
