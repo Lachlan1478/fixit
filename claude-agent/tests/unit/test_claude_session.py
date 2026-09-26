@@ -215,6 +215,27 @@ def test_resume_is_dropped_when_cwd_changes(monkeypatch):
     assert "cwd-test" not in cs._agent_session_cwd
 
 
+def test_accept_edits_keeps_bash_for_settings_allow_rules(monkeypatch):
+    """acceptEdits leaves Bash available so settings allow rules can apply."""
+    import asyncio
+
+    captured = {}
+
+    async def fake_exec(*argv, **kwargs):
+        captured["argv"] = argv
+        raise FileNotFoundError
+
+    monkeypatch.setattr(cs.asyncio, "create_subprocess_exec", fake_exec)
+
+    async def run():
+        return [e async for e in cs._stream_task_impl("hi", "ae-test", "haiku", "acceptEdits", "/tmp")]
+
+    asyncio.run(run())
+    argv = captured["argv"]
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+    assert "--disallowedTools" not in argv
+
+
 def test_stream_task_keeps_running_after_consumer_disconnects(monkeypatch):
     import asyncio
 

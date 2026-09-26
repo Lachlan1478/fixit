@@ -172,7 +172,7 @@ _MODELS: dict[str, str] = {
 
 # UI permission modes → the CLI's --permission-mode value.
 #   auto        — full autonomy, nothing is asked (the historical behaviour)
-#   acceptEdits — file edits auto-apply; other tools (Bash…) ask for approval
+#   acceptEdits — file edits auto-apply; Bash runs only if allowed by settings
 #   plan        — read-only; Claude returns a plan and makes no changes
 _PERMISSION_MODES: dict[str, str] = {
     "auto":        "bypassPermissions",
@@ -180,12 +180,9 @@ _PERMISSION_MODES: dict[str, str] = {
     "plan":        "plan",
 }
 _DEFAULT_MODE = "auto"
-
-# The CLI can't do interactive per-tool approval in headless (--print) mode —
-# it emits no permission prompts to answer. So "acceptEdits" is enforced as a
-# static policy: file edits + reads run automatically, but the shell tools are
-# removed from Claude's toolset entirely, so no commands can run.
-_ACCEPT_EDITS_BLOCK = ["Bash", "PowerShell"]
+# Headless (--print) can't prompt, so in acceptEdits any command not matched by
+# a permissions.allow rule (user settings, or a trusted cwd's .claude/settings*)
+# is denied rather than asked.
 
 
 def get_history(agent_id: str) -> list[dict]:
@@ -558,9 +555,6 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         "--model", model_id,
         "--system-prompt", _system_prompt(cwd),
     ]
-    if mode == "acceptEdits":
-        # Block the shell tools so edits auto-apply but no commands run.
-        cmd += ["--disallowedTools", *_ACCEPT_EDITS_BLOCK]
     if session_id:
         cmd += ["--resume", session_id]
 
