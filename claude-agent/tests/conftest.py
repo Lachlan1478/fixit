@@ -279,3 +279,12 @@ def ui_page(page, live_server_url):
     page.goto(live_server_url)
     page.wait_for_load_state("networkidle")
     return page
+
+
+# ── Playwright: never touch the real ~/Library (no macOS "access data" prompts) ──
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args():
+    import browser
+
+    return browser.launch_options()

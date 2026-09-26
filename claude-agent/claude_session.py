@@ -134,6 +134,11 @@ Examples:
 If playwright isn't installed, install it first:
     pip install playwright && python -m playwright install chromium
 
+Any other Playwright script you write MUST launch Chromium with the agent's quiet options — \
+`sys.path.insert(0, "claude-agent"); from browser import launch_options; p.chromium.launch(**launch_options())` — \
+never a bare `p.chromium.launch()`: on macOS a bare launch probes the user's other browsers and pops a \
+"python3.12 would like to access data from other apps" dialog on their screen every time.
+
 ## Other UI capabilities
 
 - **HTML preview** — files written to claude-agent/static/ auto-load in a live iframe.

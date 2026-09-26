@@ -22,12 +22,15 @@ from datetime import datetime
 async def _shot(url: str, name: str) -> str:
     from playwright.async_api import async_playwright
 
+    sys.path.insert(0, os.path.dirname(__file__))
+    from browser import launch_options
+
     out_dir = os.path.join(os.path.dirname(__file__), "static", "screenshots")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{name}.png")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await p.chromium.launch(**launch_options())
         page = await browser.new_page(viewport={"width": 1280, "height": 800})
         await page.goto(url, wait_until="networkidle", timeout=30_000)
         await page.screenshot(path=out_path, full_page=False)
