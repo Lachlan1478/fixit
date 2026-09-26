@@ -130,7 +130,7 @@ class RateLimitState:
         try:
             os.makedirs(os.path.dirname(QUEUE_FILE), exist_ok=True)
             with open(QUEUE_FILE, "w", encoding="utf-8") as f:
-                json.dump({"reset_at": self.reset_at.isoformat() if self.reset_at else None, "queue": self.queue}, f, indent=1)
+                json.dump({"reset_at": self.reset_at.isoformat() if self.reset_at else None, "queue": self.queue, "limits": current_limits() or None}, f, indent=1)
         except OSError as exc:
             logger.error("Could not persist queue: %s", exc)
 
@@ -142,6 +142,9 @@ class RateLimitState:
         except (OSError, ValueError):
             return False
         self.queue = list(data.get("queue") or [])
+        if data.get("limits"):  # so capped entries are still held after a restart, before the CLI reports again
+            import claude_session as cs
+            cs._last_limits = cs._last_limits or data["limits"]
         if self.queue and data.get("reset_at"):
             self.is_limited = True
             self.reset_at = datetime.fromisoformat(data["reset_at"])

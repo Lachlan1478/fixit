@@ -378,3 +378,16 @@ async def test_drain_runs_capped_entry_once_usage_drops(monkeypatch):
 
     assert await rl.drain_queue() is None
     assert ran == ["capped"] and state.queue == []
+
+
+def test_usage_snapshot_survives_restart(monkeypatch, tmp_path):
+    import claude_session as cs
+
+    monkeypatch.setattr(rl, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    snapshot = _window(80)
+    monkeypatch.setattr(cs, "_last_limits", snapshot)
+    rl.RateLimitState().enqueue("capped", "default", "opus", "auto", "/tmp/proj", max_usage=50)
+    monkeypatch.setattr(cs, "_last_limits", None)
+    fresh = rl.RateLimitState()
+    assert fresh.load() and cs._last_limits == snapshot
+    assert rl.blocked_until(fresh.queue[0]) is not None
