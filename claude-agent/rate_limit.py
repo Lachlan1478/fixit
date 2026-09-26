@@ -85,6 +85,7 @@ class RateLimitState:
         self.is_limited: bool = False
         self.reset_at: Optional[datetime] = None
         self.queue: list[dict] = []
+        self.running: Optional[str] = None  # id of the entry _run_entry is streaming
         self._cleared: asyncio.Event = asyncio.Event()
         self._cleared.set()
         self._watch_task: Optional[asyncio.Task] = None
@@ -158,7 +159,9 @@ class RateLimitState:
             "is_limited": self.is_limited,
             "reset_at": self.reset_at.isoformat() if self.reset_at else None,
             "queued": len(self.queue),
+            "running": self.running,
             "usage": current_usage(),
+            "limits": current_limits(),
         }
 
 
@@ -306,14 +309,18 @@ async def _run_entry(entry: dict) -> None:
     header = f"Project: {project}\nAgent: {entry['agent_id']}\nModel: {entry['model']}\n\nPrompt:\n{entry['prompt']}"
     await send_notification(f"{why} — Claude is now running your queued prompt.\n\n{header}", subject=f"Claude resumed · {project}")
     result = ""
-    async for event in cs.stream_task(entry["prompt"], entry["agent_id"], entry["model"], "auto", cwd=entry["cwd"], source="queue"):
-        if event.get("type") == "rate_limited":
-            _state.set_limited(datetime.fromisoformat(event["reset_at"]))
-            logger.info("Queued prompt %s hit the limit; retrying at %s", entry["id"], _state.reset_at)
-            return
-        if event.get("type") == "done":
-            result = event.get("result") or ""
-        elif event.get("type") == "error":
-            result = f"Error: {event.get('message')}"
+    _state.running = entry["id"]
+    try:
+        async for event in cs.stream_task(entry["prompt"], entry["agent_id"], entry["model"], "auto", cwd=entry["cwd"], source="queue"):
+            if event.get("type") == "rate_limited":
+                _state.set_limited(datetime.fromisoformat(event["reset_at"]))
+                logger.info("Queued prompt %s hit the limit; retrying at %s", entry["id"], _state.reset_at)
+                return
+            if event.get("type") == "done":
+                result = event.get("result") or ""
+            elif event.get("type") == "error":
+                result = f"Error: {event.get('message')}"
+    finally:
+        _state.running = None
     _state.remove(entry["id"])
     await send_notification(f"{header}\n\nResult:\n{result}", subject=f"Claude finished · {project}")

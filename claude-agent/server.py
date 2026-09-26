@@ -255,7 +255,8 @@ async def rate_limit_status():
 @app.get("/queue", dependencies=_PROTECTED)
 async def get_queue():
     state = rl.get_state()
-    return {**state.to_dict(), "queue": state.queue}
+    queue = [{**e, "blocked_until": (b := rl.blocked_until(e)) and b.isoformat()} for e in state.queue]
+    return {**state.to_dict(), "queue": queue}
 
 
 @app.delete("/queue/{entry_id}", dependencies=_PROTECTED)

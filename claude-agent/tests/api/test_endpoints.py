@@ -229,6 +229,7 @@ async def test_task_while_limited_is_queued_not_run(client, monkeypatch):
 
     listing = (await client.get("/queue")).json()
     assert listing["queued"] == 1 and listing["queue"][0]["id"] == body["id"]
+    assert listing["running"] is None and listing["queue"][0]["blocked_until"] is None and "limits" in listing
     assert (await client.delete(f"/queue/{body['id']}")).status_code == 200
     assert (await client.delete(f"/queue/{body['id']}")).status_code == 404
     assert (await client.get("/rate_limit_status")).json()["queued"] == 0

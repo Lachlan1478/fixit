@@ -187,7 +187,7 @@ async def test_state_wait_until_clear():
 def test_to_dict_not_limited():
     state = RateLimitState()
     d = state.to_dict()
-    assert d == {"is_limited": False, "reset_at": None, "queued": 0, "usage": None}
+    assert d == {"is_limited": False, "reset_at": None, "queued": 0, "running": None, "usage": None, "limits": rl.current_limits()}
 
 
 @pytest.mark.unit
@@ -250,6 +250,7 @@ async def test_drain_runs_in_order_emails_and_requeues_on_limit(monkeypatch):
 
     async def fake_stream(prompt, agent_id, model, mode, cwd=None, source="phone"):
         runs.append((prompt, agent_id, model, mode, cwd, source))
+        assert state.running == next(e["id"] for e in state.queue if e["prompt"] == prompt)
         if prompt == "two" and len(runs) == 2:
             yield {"type": "rate_limited", "reset_at": reset_again, "message": "limit"}
             return
@@ -266,6 +267,7 @@ async def test_drain_runs_in_order_emails_and_requeues_on_limit(monkeypatch):
     await rl.drain_queue()
 
     assert [r[0] for r in runs] == ["one", "two"]
+    assert state.running is None and state.to_dict()["running"] is None
     assert runs[0][1:] == ("a", "opus", "auto", "/w/lifetracker", "queue")
     assert [e["prompt"] for e in state.queue] == ["two"]
     assert state.is_limited and state.reset_at.isoformat() == reset_again
