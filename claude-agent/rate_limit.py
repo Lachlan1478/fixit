@@ -109,11 +109,11 @@ class RateLimitState:
     async def wait_until_clear(self) -> None:
         await self._cleared.wait()
 
-    def enqueue(self, prompt: str, agent_id: str, model: str, mode: str, cwd: str, front: bool = False, max_usage: Optional[int] = None) -> dict:
+    def enqueue(self, prompt: str, agent_id: str, model: str, cwd: str, front: bool = False, max_usage: Optional[int] = None) -> dict:
         """Queue a prompt; `front` for an interrupted run, `max_usage` to hold it until 5h usage is under that %."""
         entry = {
             "id": secrets.token_hex(4), "prompt": prompt, "agent_id": agent_id,
-            "model": model, "mode": mode, "cwd": cwd, "max_usage": max_usage,
+            "model": model, "cwd": cwd, "max_usage": max_usage,
             "queued_at": datetime.now(timezone.utc).isoformat(),
         }
         self.queue.insert(0 if front else len(self.queue), entry)
@@ -242,12 +242,12 @@ def _project(entry: dict) -> str:
     return os.path.basename(entry["cwd"].rstrip(os.sep)) or entry["cwd"]
 
 
-async def handle_limit_hit(reset_at: datetime, prompt: str, agent_id: str, model: str, mode: str, cwd: str) -> dict:
+async def handle_limit_hit(reset_at: datetime, prompt: str, agent_id: str, model: str, cwd: str) -> dict:
     """Record a limit hit mid-run: queue the prompt first, arm the watcher, notify."""
     from notifications import send_notification
 
     _state.set_limited(reset_at)
-    entry = _state.enqueue(prompt, agent_id, model, mode, cwd, front=True)
+    entry = _state.enqueue(prompt, agent_id, model, cwd, front=True)
     arm_watcher()
     await send_notification(
         f"Claude usage limit hit while working on {_project(entry)}.\n"
@@ -306,7 +306,7 @@ async def _run_entry(entry: dict) -> None:
     header = f"Project: {project}\nAgent: {entry['agent_id']}\nModel: {entry['model']}\n\nPrompt:\n{entry['prompt']}"
     await send_notification(f"{why} — Claude is now running your queued prompt.\n\n{header}", subject=f"Claude resumed · {project}")
     result = ""
-    async for event in cs.stream_task(entry["prompt"], entry["agent_id"], entry["model"], entry["mode"], cwd=entry["cwd"], source="queue"):
+    async for event in cs.stream_task(entry["prompt"], entry["agent_id"], entry["model"], "auto", cwd=entry["cwd"], source="queue"):
         if event.get("type") == "rate_limited":
             _state.set_limited(datetime.fromisoformat(event["reset_at"]))
             logger.info("Queued prompt %s hit the limit; retrying at %s", entry["id"], _state.reset_at)

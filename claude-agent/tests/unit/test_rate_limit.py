@@ -203,7 +203,7 @@ def test_to_dict_limited():
 # ── Queue tests ──────────────────────────────────────────────────────────────
 
 def _entry(state, prompt="p", **kw):
-    return state.enqueue(prompt, kw.get("agent_id", "a"), kw.get("model", "opus"), kw.get("mode", "auto"), kw.get("cwd", "/w/lifetracker"), front=kw.get("front", False))
+    return state.enqueue(prompt, kw.get("agent_id", "a"), kw.get("model", "opus"), kw.get("cwd", "/w/lifetracker"), front=kw.get("front", False))
 
 
 def test_enqueue_order_front_and_remove():
@@ -295,7 +295,7 @@ async def test_handle_limit_hit_queues_front_and_notifies(monkeypatch):
     _entry(state, "already waiting")
     reset = datetime.now(timezone.utc) + timedelta(hours=3)
 
-    entry = await rl.handle_limit_hit(reset, "broken off", "desk", "opus", "auto", "/w/lifetracker")
+    entry = await rl.handle_limit_hit(reset, "broken off", "desk", "opus", "/w/lifetracker")
 
     assert state.is_limited and state.reset_at == reset
     assert [e["prompt"] for e in state.queue] == ["broken off", "already waiting"]
@@ -352,8 +352,8 @@ async def test_drain_skips_capped_entries_and_runs_the_rest(monkeypatch):
     monkeypatch.setattr(cs, "stream_task", _run)
     monkeypatch.setattr(cs, "_last_limits", _window(80))
     state = rl.get_state()
-    state.enqueue("capped", "default", "opus", "auto", "/tmp/proj", max_usage=50)
-    state.enqueue("free", "default", "opus", "auto", "/tmp/proj")
+    state.enqueue("capped", "default", "opus", "/tmp/proj", max_usage=50)
+    state.enqueue("free", "default", "opus", "/tmp/proj")
 
     wake_at = await rl.drain_queue()
 
@@ -374,7 +374,7 @@ async def test_drain_runs_capped_entry_once_usage_drops(monkeypatch):
     monkeypatch.setattr(cs, "stream_task", _run)
     monkeypatch.setattr(cs, "_last_limits", _window(10))
     state = rl.get_state()
-    state.enqueue("capped", "default", "opus", "auto", "/tmp/proj", max_usage=50)
+    state.enqueue("capped", "default", "opus", "/tmp/proj", max_usage=50)
 
     assert await rl.drain_queue() is None
     assert ran == ["capped"] and state.queue == []
@@ -386,7 +386,7 @@ def test_usage_snapshot_survives_restart(monkeypatch, tmp_path):
     monkeypatch.setattr(rl, "QUEUE_FILE", str(tmp_path / "queue.json"))
     snapshot = _window(80)
     monkeypatch.setattr(cs, "_last_limits", snapshot)
-    rl.RateLimitState().enqueue("capped", "default", "opus", "auto", "/tmp/proj", max_usage=50)
+    rl.RateLimitState().enqueue("capped", "default", "opus", "/tmp/proj", max_usage=50)
     monkeypatch.setattr(cs, "_last_limits", None)
     fresh = rl.RateLimitState()
     assert fresh.load() and cs._last_limits == snapshot

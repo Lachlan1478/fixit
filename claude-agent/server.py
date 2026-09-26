@@ -156,7 +156,7 @@ async def run_task(request: TaskRequest):
 
     state = rl.get_state()
     if state.is_limited or request.defer:
-        entry = state.enqueue(request.prompt, agent_id, request.model, mode, cwd, max_usage=request.max_usage)
+        entry = state.enqueue(request.prompt, agent_id, request.model, cwd, max_usage=request.max_usage)
         logger.info("Queued | agent=%s position=%d cap=%s prompt=%r", agent_id, len(state.queue), request.max_usage, request.prompt[:60])
         if not state.is_limited:
             rl.kick()
@@ -182,7 +182,7 @@ async def run_task(request: TaskRequest):
                         reset_at = datetime.fromisoformat(event.get("reset_at"))
                     except Exception:
                         reset_at = datetime.now(timezone.utc)
-                    entry = await rl.handle_limit_hit(reset_at, request.prompt, agent_id, request.model, mode, cwd)
+                    entry = await rl.handle_limit_hit(reset_at, request.prompt, agent_id, request.model, cwd)
                     event = {**event, "queued_id": entry["id"], "queued": len(rl.get_state().queue)}
 
                 yield f"data: {json.dumps(event)}\n\n"
