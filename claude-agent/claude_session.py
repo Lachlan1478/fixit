@@ -58,6 +58,10 @@ _agent_locks: dict[str, asyncio.Lock] = {}
 # Detached task pumps, referenced so the event loop never garbage-collects them
 _background_tasks: set[asyncio.Task] = set()
 
+# agent_id → the claude CLI process of its running task, so a user can stop it
+_procs: dict[str, asyncio.subprocess.Process] = {}
+_stop_requested: set[str] = set()
+
 # Last rate-limit snapshot the CLI reported (5h / 7d windows), shown in status bars
 _last_limits: dict | None = None
 
@@ -371,6 +375,22 @@ def hydrate_state() -> None:
                     len(latest), ", ".join(sorted(latest)))
 
 
+def is_busy(agent_id: str) -> bool:
+    """True while a task for this agent is running or waiting for its lock."""
+    return _get_agent_lock(agent_id).locked()
+
+
+def stop_run(agent_id: str) -> bool:
+    """Kill the agent's running claude CLI process; False if none is running."""
+    proc = _procs.get(agent_id)
+    if proc is None or proc.returncode is not None:
+        return False
+    _stop_requested.add(agent_id)
+    proc.kill()
+    logger.info("Stop requested | agent=%s pid=%s", agent_id, proc.pid)
+    return True
+
+
 def _get_agent_lock(agent_id: str) -> asyncio.Lock:
     """Return the (lazily created) lock that serialises tasks for one agent."""
     lock = _agent_locks.get(agent_id)
@@ -630,6 +650,8 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
 
     # Drain stderr concurrently so the child can never deadlock on a full
     # stderr pipe while we are still reading stdout.
+    _procs[agent_id] = proc
+    _stop_requested.discard(agent_id)
     stderr_chunks: list[bytes] = []
     stderr_task = asyncio.create_task(_drain_stderr(proc.stderr, stderr_chunks))
 
@@ -955,10 +977,13 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         await proc.wait()
         exit_code = proc.returncode
         total_ms = round(_now_ms() - task_start_ms, 1)
+        interrupted = agent_id in _stop_requested
 
         # Handle unexpected exit (idle timeout already yielded its own error)
         if exit_code != 0 and not result_text and not timed_out:
-            if rl.is_rate_limit_message(stderr_text):
+            if interrupted:
+                yield {"type": "error", "message": "Stopped by user"}
+            elif rl.is_rate_limit_message(stderr_text):
                 reset_at = cli_reset_at or rl.extract_reset_time(stderr_text)
                 yield {
                     "type": "rate_limited",
@@ -1015,6 +1040,7 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
             "raw_event_count": raw_event_count,
             "had_stderr": bool(stderr_text),
             "timed_out": timed_out,
+            "interrupted": interrupted,
         }
         await _write_jsonl_async("sessions.jsonl", session_summary)
 
@@ -1035,6 +1061,8 @@ async def _stream_task_impl(prompt: str, agent_id: str, model: str, mode: str, c
         )
 
     finally:
+        _procs.pop(agent_id, None)
+        _stop_requested.discard(agent_id)
         # Never orphan the subprocess: kill it if the generator is closed
         # early (client disconnect / GeneratorExit) or an exception escapes.
         if proc.returncode is None:

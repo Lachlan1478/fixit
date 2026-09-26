@@ -221,6 +221,17 @@ async def logs_tasks(limit: int = 50, source: str | None = None):
     return {"tasks": await asyncio.to_thread(read)}
 
 
+@app.post("/task/stop/{agent_id}", dependencies=_PROTECTED)
+async def stop_task(agent_id: str):
+    """Kill the agent's running Claude process; the run then records itself as interrupted."""
+    return {"stopped": cs.stop_run(agent_id)}
+
+
+@app.get("/config", dependencies=_PROTECTED)
+async def get_config():
+    return {"session_cwd": cs.SESSION_CWD, "workspace": WORKSPACE_ROOT}
+
+
 @app.get("/task/live/{agent_id}", dependencies=_PROTECTED)
 async def task_live(agent_id: str, since: int = 0):
     """Re-attach to a run that is still going (or just finished): replay events from `since`, then follow."""

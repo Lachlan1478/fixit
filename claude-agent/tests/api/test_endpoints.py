@@ -405,3 +405,13 @@ async def test_task_live_replays_and_follows_then_204_when_idle(client, monkeypa
     types = [json.loads(l[6:])["type"] for l in resp.text.splitlines() if l.startswith("data: ")]
     assert types == ["text", "done"]
     assert (await client.get("/task/live/nobody-here")).status_code == 204
+
+
+@pytest.mark.api
+async def test_stop_and_config(client, monkeypatch):
+    import server
+
+    assert (await client.post("/task/stop/nobody")).json() == {"stopped": False}
+    monkeypatch.setattr(cs, "stop_run", lambda agent_id: agent_id == "busy")
+    assert (await client.post("/task/stop/busy")).json() == {"stopped": True}
+    assert (await client.get("/config")).json() == {"session_cwd": cs.SESSION_CWD, "workspace": server.WORKSPACE_ROOT}
