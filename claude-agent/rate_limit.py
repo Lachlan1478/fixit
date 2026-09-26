@@ -1,22 +1,27 @@
 """
-rate_limit.py — Claude Pro usage-limit detection and state management.
+rate_limit.py — Claude usage-limit detection, state, and the prompt queue.
 
-When the Claude CLI returns a usage-limit error this module:
-  1. Parses the reset time from the error text (falls back to +5 h).
-  2. Stores the rate-limit state so the server can expose it via /rate_limit_status.
-  3. Fires a background asyncio task that sleeps until the reset time,
-     clears the state, and triggers a notification.
+When the CLI returns a usage-limit error the server records the reset time,
+queues the interrupted prompt, and arms a watcher that sleeps until the reset,
+then runs every queued prompt server-side (emailing on each dispatch and
+completion). Prompts can also be deferred with a ``max_usage`` cap: they only
+run while the CLI's reported 5-hour and 7-day utilisation are both under that
+percentage, otherwise they wait for the offending window to roll over. Queue + reset time persist to
+QUEUE_FILE so they survive a restart.
 """
 
 import asyncio
+import json
 import logging
+import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Detection patterns ──────────────────────────────────────────────────────
+QUEUE_FILE = os.path.join(os.environ.get("AGENT_LOGS_DIR") or os.path.join(os.path.dirname(__file__), "logs"), "queue.json")
 
 _LIMIT_PATTERNS = [
     r"usage.?limit",
@@ -29,17 +34,11 @@ _LIMIT_PATTERNS = [
 
 # Ordered: most specific / reliable first
 _RESET_PATTERNS = [
-    # Full ISO-8601 timestamp
     (r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)", "iso"),
-    # Unix epoch (seconds)
     (r"\breset[^0-9]*(\d{10})\b", "unix"),
-    # Unix epoch (milliseconds)
     (r"\breset[^0-9]*(\d{13})\b", "unix_ms"),
-    # "in X hours and Y minutes"
     (r"in\s+(\d+)\s*hours?\s+(?:and\s+)?(\d+)\s*minutes?", "hours_mins"),
-    # "in X hours"
     (r"in\s+(\d+(?:\.\d+)?)\s*hours?", "hours"),
-    # "in X minutes"
     (r"in\s+(\d+)\s*minutes?", "minutes"),
 ]
 
@@ -51,10 +50,7 @@ def is_rate_limit_message(text: str) -> bool:
 
 
 def extract_reset_time(text: str) -> datetime:
-    """
-    Try to parse when the limit resets from *text*.
-    Falls back to 5 hours from now if nothing useful is found.
-    """
+    """Parse when the limit resets from *text*; falls back to 5 hours from now."""
     now = datetime.now(timezone.utc)
 
     for pattern, kind in _RESET_PATTERNS:
@@ -84,67 +80,237 @@ def extract_reset_time(text: str) -> datetime:
     return now + timedelta(hours=5)
 
 
-# ── Global state ────────────────────────────────────────────────────────────
-
 class RateLimitState:
     def __init__(self) -> None:
         self.is_limited: bool = False
         self.reset_at: Optional[datetime] = None
+        self.queue: list[dict] = []
         self._cleared: asyncio.Event = asyncio.Event()
-        self._cleared.set()          # not limited initially
+        self._cleared.set()
         self._watch_task: Optional[asyncio.Task] = None
+        self._watch_at: Optional[datetime] = None
 
     def set_limited(self, reset_at: datetime) -> None:
         if self.is_limited:
-            return  # already tracking — don't restart
+            return
         self.is_limited = True
         self.reset_at = reset_at
         self._cleared.clear()
+        self.save()
         logger.info("Rate limit active; resets at %s", reset_at.isoformat())
 
     def clear_limit(self) -> None:
         self.is_limited = False
         self.reset_at = None
         self._cleared.set()
+        self.save()
         logger.info("Rate limit cleared")
 
     async def wait_until_clear(self) -> None:
         await self._cleared.wait()
 
+    def enqueue(self, prompt: str, agent_id: str, model: str, mode: str, cwd: str, front: bool = False, max_usage: Optional[int] = None) -> dict:
+        """Queue a prompt; `front` for an interrupted run, `max_usage` to hold it until 5h usage is under that %."""
+        entry = {
+            "id": secrets.token_hex(4), "prompt": prompt, "agent_id": agent_id,
+            "model": model, "mode": mode, "cwd": cwd, "max_usage": max_usage,
+            "queued_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.queue.insert(0 if front else len(self.queue), entry)
+        self.save()
+        return entry
+
+    def remove(self, entry_id: str) -> bool:
+        before = len(self.queue)
+        self.queue = [e for e in self.queue if e["id"] != entry_id]
+        self.save()
+        return len(self.queue) < before
+
+    def save(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(QUEUE_FILE), exist_ok=True)
+            with open(QUEUE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"reset_at": self.reset_at.isoformat() if self.reset_at else None, "queue": self.queue}, f, indent=1)
+        except OSError as exc:
+            logger.error("Could not persist queue: %s", exc)
+
+    def load(self) -> bool:
+        """Restore queue + limit from disk; True if anything is queued."""
+        try:
+            with open(QUEUE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return False
+        self.queue = list(data.get("queue") or [])
+        if self.queue and data.get("reset_at"):
+            self.is_limited = True
+            self.reset_at = datetime.fromisoformat(data["reset_at"])
+            self._cleared.clear()
+        if self.queue:
+            logger.info("Restored %d queued prompt(s); limited=%s", len(self.queue), self.is_limited)
+        return bool(self.queue)
+
     def to_dict(self) -> dict:
         return {
             "is_limited": self.is_limited,
             "reset_at": self.reset_at.isoformat() if self.reset_at else None,
+            "queued": len(self.queue),
+            "usage": current_usage(),
         }
 
 
 _state = RateLimitState()
+_drain_lock = asyncio.Lock()
+_kick_tasks: set[asyncio.Task] = set()
 
 
 def get_state() -> RateLimitState:
     return _state
 
 
-# ── Background watcher ──────────────────────────────────────────────────────
+def current_limits() -> dict:
+    """The CLI's last-reported windows, five_hour / seven_day -> {used_percentage, resets_at}; empty before any run."""
+    import claude_session as cs
 
-async def watch_and_clear(reset_at: datetime) -> None:
-    """
-    Sleep until *reset_at*, then clear the rate-limit flag and send a
-    notification through every configured channel.
-    """
-    from notifications import send_notification  # late import — avoids circular
+    return cs._last_limits or {}
 
+
+def current_usage() -> Optional[dict]:
+    """The 5h window alone, for the UI countdown."""
+    return current_limits().get("five_hour")
+
+
+def blocked_until(entry: dict) -> Optional[datetime]:
+    """When a usage-capped entry may next be tried, or None if it can run now."""
+    cap = entry.get("max_usage")
+    if cap is None:
+        return None
     now = datetime.now(timezone.utc)
-    wait_secs = max(30.0, (reset_at - now).total_seconds())
-    logger.info("Rate-limit watcher sleeping %.0f s until %s", wait_secs, reset_at.isoformat())
+    blocked = None
+    for window in current_limits().values():
+        resets = window.get("resets_at")
+        reset_dt = datetime.fromtimestamp(int(resets), tz=timezone.utc) if resets else None
+        if (reset_dt and reset_dt <= now) or window.get("used_percentage", 0) < cap:  # rolled over since the CLI last reported, or under cap
+            continue
+        until = reset_dt or now + timedelta(minutes=30)
+        blocked = max(blocked, until) if blocked else until
+    return blocked
 
-    await asyncio.sleep(wait_secs)
 
-    _state.clear_limit()
+def arm_watcher(at: Optional[datetime] = None) -> None:
+    """Sleep until *at* (default: the limit reset) then drain; an earlier *at* replaces a sleeping watcher."""
+    at = at or _state.reset_at or datetime.now(timezone.utc)
+    task = _state._watch_task
+    if task and not task.done():
+        if _drain_lock.locked() or (_state._watch_at and at >= _state._watch_at):
+            return
+        task.cancel()
+    _state._watch_at = at
+    _state._watch_task = asyncio.create_task(watch_and_clear(at))
 
-    msg = (
-        f"✅ Claude usage limit has reset!\n"
-        f"You can resume your Claude Agent session now.\n"
-        f"Reset at: {reset_at.strftime('%Y-%m-%d %H:%M UTC')}"
+
+def kick() -> None:
+    """Try the queue now; whatever is still held back re-arms the watcher."""
+    if _state.is_limited:
+        arm_watcher()
+        return
+
+    async def _run() -> None:
+        wake_at = await drain_queue()
+        if wake_at:
+            arm_watcher(wake_at)
+
+    task = asyncio.create_task(_run())
+    _kick_tasks.add(task)
+    task.add_done_callback(_kick_tasks.discard)
+
+
+def resume() -> None:
+    """After a restart: restore the queue and pick up where the watcher left off."""
+    if _state.load():
+        kick()
+
+
+def _fmt(dt: datetime) -> str:
+    return dt.astimezone().strftime("%a %H:%M %Z")
+
+
+def _project(entry: dict) -> str:
+    return os.path.basename(entry["cwd"].rstrip(os.sep)) or entry["cwd"]
+
+
+async def handle_limit_hit(reset_at: datetime, prompt: str, agent_id: str, model: str, mode: str, cwd: str) -> dict:
+    """Record a limit hit mid-run: queue the prompt first, arm the watcher, notify."""
+    from notifications import send_notification
+
+    _state.set_limited(reset_at)
+    entry = _state.enqueue(prompt, agent_id, model, mode, cwd, front=True)
+    arm_watcher()
+    await send_notification(
+        f"Claude usage limit hit while working on {_project(entry)}.\n"
+        f"{len(_state.queue)} prompt(s) queued — resuming automatically at {_fmt(reset_at)}.\n\n"
+        f"Prompt:\n{prompt}",
+        subject=f"Claude limit hit · {_project(entry)}",
     )
-    await send_notification(msg)
+    return entry
+
+
+async def watch_and_clear(wake_at: datetime) -> None:
+    """Sleep until *wake_at*, then drain; loop while the limit or a usage cap still holds prompts back."""
+    from notifications import send_notification
+
+    while True:
+        wait_secs = max(30.0, (wake_at - datetime.now(timezone.utc)).total_seconds())
+        logger.info("Queue watcher sleeping %.0f s until %s", wait_secs, wake_at.isoformat())
+        await asyncio.sleep(wait_secs)
+        if _state.is_limited:
+            _state.clear_limit()
+            if not _state.queue:
+                await send_notification("Claude usage limit has reset — you can resume now.", subject="Claude limit reset")
+                return
+        wake_at = await drain_queue()
+        if wake_at is None:
+            return
+        _state._watch_at = wake_at
+
+
+async def drain_queue() -> Optional[datetime]:
+    """Run runnable queued prompts in order; return when to try again, or None if nothing is held back."""
+    async with _drain_lock:
+        skipped: set[str] = set()
+        wake_at: Optional[datetime] = None
+        while not _state.is_limited:
+            entry = next((e for e in _state.queue if e["id"] not in skipped), None)
+            if entry is None:
+                break
+            blocked = blocked_until(entry)
+            if blocked:
+                skipped.add(entry["id"])
+                wake_at = min(wake_at, blocked) if wake_at else blocked
+                continue
+            await _run_entry(entry)
+        return _state.reset_at if _state.is_limited else wake_at
+
+
+async def _run_entry(entry: dict) -> None:
+    import claude_session as cs
+    from notifications import send_notification
+
+    project = _project(entry)
+    cap = entry.get("max_usage")
+    used = " / ".join(f"{k.replace('_', ' ')} {w.get('used_percentage')}%" for k, w in current_limits().items())
+    why = f"Usage ({used}) is under your {cap}% cap" if cap is not None else "Usage limit reset"
+    header = f"Project: {project}\nAgent: {entry['agent_id']}\nModel: {entry['model']}\n\nPrompt:\n{entry['prompt']}"
+    await send_notification(f"{why} — Claude is now running your queued prompt.\n\n{header}", subject=f"Claude resumed · {project}")
+    result = ""
+    async for event in cs.stream_task(entry["prompt"], entry["agent_id"], entry["model"], entry["mode"], cwd=entry["cwd"], source="queue"):
+        if event.get("type") == "rate_limited":
+            _state.set_limited(datetime.fromisoformat(event["reset_at"]))
+            logger.info("Queued prompt %s hit the limit; retrying at %s", entry["id"], _state.reset_at)
+            return
+        if event.get("type") == "done":
+            result = event.get("result") or ""
+        elif event.get("type") == "error":
+            result = f"Error: {event.get('message')}"
+    _state.remove(entry["id"])
+    await send_notification(f"{header}\n\nResult:\n{result}", subject=f"Claude finished · {project}")

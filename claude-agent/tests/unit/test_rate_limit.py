@@ -330,6 +330,16 @@ def test_blocked_until(monkeypatch, entry, limits, expect_blocked):
         assert blocked is None
 
 
+def test_blocked_until_holds_on_seven_day_window_too(monkeypatch):
+    import claude_session as cs
+
+    week = int(datetime.now(timezone.utc).timestamp()) + 5 * 86400
+    monkeypatch.setattr(cs, "_last_limits", {**_window(10), "seven_day": {"used_percentage": 60, "resets_at": week}})
+    assert rl.blocked_until({"max_usage": 50}) == datetime.fromtimestamp(week, tz=timezone.utc)
+    monkeypatch.setattr(cs, "_last_limits", {**_window(60), "seven_day": {"used_percentage": 60, "resets_at": week}})
+    assert rl.blocked_until({"max_usage": 50}) == datetime.fromtimestamp(week, tz=timezone.utc)  # later of the two resets
+
+
 async def test_drain_skips_capped_entries_and_runs_the_rest(monkeypatch):
     import claude_session as cs
 

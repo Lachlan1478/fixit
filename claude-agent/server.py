@@ -131,7 +131,7 @@ class TaskRequest(BaseModel):
     cwd: str | None = None   # workspace-relative folder Claude runs in (default AGENT_HOME)
     source: str = "phone"    # phone | dashboard — recorded with every prompt/response
     defer: bool = False      # queue instead of running now
-    max_usage: int | None = Field(default=None, ge=1, le=100)  # only run while 5h usage is under this %
+    max_usage: int | None = Field(default=None, ge=1, le=100)  # only run while 5h and 7d usage are both under this %
 
 
 class ResetMemoryRequest(BaseModel):
